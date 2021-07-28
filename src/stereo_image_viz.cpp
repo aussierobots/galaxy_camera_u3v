@@ -43,8 +43,7 @@ public:
       int raw_type;
       int code;
       uint8_t *img_buf_u8_p = const_cast<uint8_t*>(&img_msg->data[0]);
-      // auto bayer_u8_data = std::vector<uint8_t>();
-      // std::vector<uint16_t> data16;
+      auto bayer_u8_data = std::vector<uint8_t>();
       cv::Mat raw;
       if (raw_encoding == enc::RGB8) {
         raw_type = CV_8UC3;
@@ -56,24 +55,29 @@ public:
         raw_type = CV_16UC1;
         code = cv::COLOR_BayerBG2BGR;
       }
-      RCLCPP_INFO_ONCE(get_logger(),"img_msg - height: %d width: %d step: %d", img_msg->height, img_msg->width, img_msg->step);
+      // RCLCPP_INFO_ONCE(get_logger(),"img_msg - height: %d width: %d step: %d", img_msg->height, img_msg->width, img_msg->step);
 
       if (raw_type == CV_16UC1) {
 
-        // bayer_u8_data.resize(img_msg->height * img_msg->width);
+        bayer_u8_data.resize(img_msg->height * img_msg->width);
         auto bayer_16uc1 = cv::Mat(img_msg->height, img_msg->width, raw_type, img_buf_u8_p, img_msg->step);
-        // bayer_16uc1.forEach<uint16_t>(
-        //   [&bayer_u8_data,img_msg](uint16_t &v, const int *position){
-        //     // maximum value of 10bits is 1023
-        //     bayer_u8_data[(position[0]*img_msg->width) +position[1]]=v * 65535./1023;
-        //   }
-        // );
+        bayer_16uc1.forEach<uint16_t>(
+          [&bayer_u8_data,img_msg](uint16_t &v, const int *position){
+
+            auto bit_extract = [] (uint16_t value, int begin, int end) {
+                uint16_t mask = (1 << (end - begin)) - 1;
+                return (value >> begin) & mask;
+            };
+
+            bayer_u8_data[(position[0]*img_msg->width) +position[1]]=bit_extract(v, 2, 10) ;
+          }
+        );
 
         // RCLCPP_INFO(get_logger(), "%s bayer_u8_data.size(): %ld", window_name.c_str(), bayer_u8_data.size());
-        // raw = cv::Mat(img_msg->height, img_msg->width, CV_8UC1, &bayer_u8_data.data()[0], img_msg->step/2);
+        raw = cv::Mat(img_msg->height, img_msg->width, CV_8UC1, &bayer_u8_data.data()[0], img_msg->step/2);
         // raw = cv::Mat(img_msg->height, img_msg->width, raw_type, img_buf_u8_p, img_msg->step);
-        raw = cv::Mat(img_msg->height, img_msg->width, CV_8UC1);
-        bayer_16uc1.convertTo(raw, CV_8UC1, 0.0625);
+        // raw = cv::Mat(img_msg->height, img_msg->width, CV_8UC1);
+        // bayer_16uc1.convertTo(raw, CV_8UC1, 0.0625);
 
       } else {
         raw = cv::Mat(img_msg->height, img_msg->width, raw_type,

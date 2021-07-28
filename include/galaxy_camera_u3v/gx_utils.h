@@ -19,6 +19,12 @@
 
 #include <string>
 
+uint8_t bit_extract(uint16_t value, int begin, int end)
+{
+    uint16_t mask = (1 << (end - begin)) - 1;
+    return static_cast<uint8_t>((value >> begin) & mask);
+}
+
 struct CameraDeviceInfo {
   std::string vendor_name;
   std::string model_name;
