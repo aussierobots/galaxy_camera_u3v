@@ -31,6 +31,7 @@ include_directories(include SYSTEM)
 
 add_library(camera_components SHARED
   src/u3v_image_pub.cpp
+  src/capture_trigger.cpp
   src/stereo_image_viz.cpp
 )
 
@@ -46,12 +47,13 @@ ament_target_dependencies(camera_components
   OpenCV)
 
 target_link_libraries(camera_components
-  pthread 
+  pthread
   gxiapi
   ${OpenCV_LIBRARIES}
 )
 
 rclcpp_components_register_node(camera_components PLUGIN "camera::U3vImagePub" EXECUTABLE u3v_image_pub)
+rclcpp_components_register_node(camera_components PLUGIN "camera::CaptureTrigger" EXECUTABLE capture_trigger)
 rclcpp_components_register_node(camera_components PLUGIN "camera::StereoImageViz" EXECUTABLE stereo_image_viz)
 
 install(TARGETS

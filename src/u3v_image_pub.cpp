@@ -9,6 +9,7 @@
 #include "galaxy_camera_u3v/gx_utils.h"
 #include <unistd.h>
 #include "sensor_msgs/msg/image.hpp"
+#include "sensor_msgs/msg/time_reference.hpp"
 #include "sensor_msgs/image_encodings.hpp"
 #include "sensor_msgs/msg/compressed_image.hpp"
 #include "sensor_msgs/msg/camera_info.hpp"
@@ -170,7 +171,8 @@ public:
 
     // camera parameters - these are the default values. Values will be set on the camera if appropriate
     this->declare_parameter<int64_t>("acquisition_mode", GX_ACQ_MODE_CONTINUOUS);
-    this->declare_parameter<int64_t>("trigger_mode",0);
+    this->declare_parameter<int64_t>("trigger_mode",GX_TRIGGER_MODE_OFF);
+    this->declare_parameter<int64_t>("trigger_source",GX_TRIGGER_SOURCE_SOFTWARE);
     this->declare_parameter<int64_t>("exposure_mode", GX_EXPOSURE_MODE_TIMED);
     this->declare_parameter<double_t>("exposure_time", 100.0);
     this->declare_parameter<int64_t>("exposure_auto", GX_EXPOSURE_AUTO_CONTINUOUS);
@@ -211,9 +213,6 @@ public:
     // publishers
     pub_ = image_transport::create_camera_publisher(this, topic_+"/image_raw", qos.get_rmw_qos_profile());
 
-    // only acquire an image if triggered
-    triggered_ = false;
-
     // initialise are start the timer to work out the frames per second)
     auto start_time = std::chrono::steady_clock::now();
     frame_time_ = start_time;
@@ -222,12 +221,14 @@ public:
 
     param_timer_ = this->create_wall_timer(1s, std::bind(&U3vImagePub::param_timer_callback, this));
 
-    capture_timer_ = this->create_wall_timer(10ms, std::bind(&U3vImagePub::capture_timer_callback, this));
+    capture_timer_ = this->create_wall_timer(10ns, std::bind(&U3vImagePub::capture_timer_callback, this));
 
     // just use for testing - trigger should come from the controller
-    auto frame_duration = 1s/FRAME_RATE;
-    trigger_timer_ = this->create_wall_timer(frame_duration, std::bind(&U3vImagePub::trigger_timer_callback, this));
+    // auto frame_duration = 1000000us/FRAME_RATE;
+    // trigger_timer_ = this->create_wall_timer(frame_duration, std::bind(&U3vImagePub::trigger_timer_callback, this));
 
+
+    capture_trigger_sub_ = this->create_subscription<sensor_msgs::msg::TimeReference>("/capture_trigger", qos, std::bind(&U3vImagePub::capture_trigger_callback, this, std::placeholders::_1));
     is_initialising_ = false;
   }
 
@@ -253,9 +254,11 @@ private:
   rclcpp::node_interfaces::OnSetParametersCallbackHandle::SharedPtr parameters_callback_handle_;
   rclcpp::TimerBase::SharedPtr frame_timer_;
   rclcpp::TimerBase::SharedPtr param_timer_;
-  rclcpp::TimerBase::SharedPtr trigger_timer_;
+  // rclcpp::TimerBase::SharedPtr trigger_timer_;
   rclcpp::TimerBase::SharedPtr info_timer_;
   rclcpp::TimerBase::SharedPtr capture_timer_;
+
+  rclcpp::Subscription<sensor_msgs::msg::TimeReference>::SharedPtr capture_trigger_sub_;
 
   // ros2 camera
   image_transport::CameraPublisher pub_;
@@ -270,6 +273,7 @@ private:
   // camera related
   std::string device_sn_;
   rclcpp::Time trigger_timestamp_;
+  std::string trigger_source_;
   GX_DEV_HANDLE gx_dev_handle_;
 
   int64_t color_filter_;
@@ -278,8 +282,6 @@ private:
 
   u_char *RGB_image_buf_;
   u_char *image_buf_;
-
-  bool triggered_;
 
   std::chrono::time_point<std::chrono::steady_clock> frame_time_;
 
@@ -333,6 +335,10 @@ private:
       if (parameter.get_name() == "trigger_mode" &&
           parameter.get_type() == rclcpp::ParameterType::PARAMETER_INTEGER) {
           result = param_gx_set_enum(GX_ENUM_TRIGGER_MODE, parameter.as_int());
+      }
+      if (parameter.get_name() == "trigger_source" &&
+          parameter.get_type() == rclcpp::ParameterType::PARAMETER_INTEGER) {
+          result = param_gx_set_enum(GX_ENUM_TRIGGER_SOURCE, parameter.as_int());
       }
       if (parameter.get_name() == "exposure_mode" &&
           parameter.get_type() == rclcpp::ParameterType::PARAMETER_INTEGER) {
@@ -565,39 +571,66 @@ private:
     RCLCPP_INFO(this->get_logger(), "fps: %f", fps);
   }
 
-  CAMERA_LOCAL
-  void trigger_timer_callback() {
-    this->trigger_timestamp_ = rclcpp::Clock().now();
+  // CAMERA_LOCAL
+  // void trigger_timer_callback() {
+  //   this->trigger_timestamp_ = rclcpp::Clock().now();
 
-    if(triggered_) {
-      RCLCPP_DEBUG(this->get_logger(),"last trigger not finished triggered_: %d", triggered_);
-      return;
+  //   if(triggered_) {
+  //     RCLCPP_DEBUG(this->get_logger(),"last trigger not finished triggered_: %d", triggered_);
+  //     return;
+  //   }
+
+  //   // GX_STATUS status = GXSendCommand(this->gx_dev_handle_, GX_COMMAND_TRIGGER_SOFTWARE);
+  //   triggered_ = true;
+
+  //   // if (status != GX_STATUS_SUCCESS) {
+  //   //   auto error_msg = GetErrorString(status);
+  //   //   RCLCPP_WARN(this->get_logger(), "unable to trigger gx_dev_handle_(%d): %s", this->gx_dev_handle_, error_msg);
+  //   // }
+  // }
+
+  CAMERA_LOCAL
+  bool trigger_mode() {
+    auto param = get_parameter("trigger_mode");
+    if (param.as_int() == GX_TRIGGER_MODE_OFF){
+      return false;
+    } else {
+      return true;
+    }
+  }
+
+  CAMERA_LOCAL
+  void capture_trigger_callback(const sensor_msgs::msg::TimeReference::SharedPtr msg) {
+    // if it was started in continuous and we receive capture trigger message enable it
+    if (!trigger_mode()) {
+      set_parameter(rclcpp::Parameter("trigger_mode", GX_TRIGGER_MODE_ON));
+      set_parameter(rclcpp::Parameter("trigger_source", GX_TRIGGER_SOURCE_SOFTWARE));
+      // started in timer
+      capture_timer_->cancel();
     }
 
-    // GX_STATUS status = GXSendCommand(this->gx_dev_handle_, GX_COMMAND_TRIGGER_SOFTWARE);
-    triggered_ = true;
+    this->trigger_timestamp_ = msg->time_ref;
+    this->trigger_source_ = msg->source;
 
-    // if (status != GX_STATUS_SUCCESS) {
-    //   auto error_msg = GetErrorString(status);
-    //   RCLCPP_WARN(this->get_logger(), "unable to trigger gx_dev_handle_(%d): %s", this->gx_dev_handle_, error_msg);
-    // }
+    GX_STATUS status = GXSendCommand(this->gx_dev_handle_, GX_COMMAND_TRIGGER_SOFTWARE);
+    if (status != GX_STATUS_SUCCESS) {
+      auto error_msg = GetErrorString(status);
+      RCLCPP_WARN(this->get_logger(), "unable to trigger gx_dev_handle_(%p): %s", this->gx_dev_handle_, error_msg);
+    }
+
+    this->capture_device(topic_, gx_dev_handle_, RGB_image_buf_, image_buf_, color_filter_, payload_size_);
   }
 
   CAMERA_LOCAL
   void capture_timer_callback() {
-    this->capture_device(&triggered_, topic_, gx_dev_handle_, RGB_image_buf_, image_buf_, color_filter_, payload_size_);
+    trigger_timestamp_ = rclcpp::Clock().now();
+    this->capture_device(topic_, gx_dev_handle_, RGB_image_buf_, image_buf_, color_filter_, payload_size_);
   }
 
   CAMERA_LOCAL
-  void capture_device(bool * triggered, std::string topic, GX_DEV_HANDLE gx_dev_handle, u_char * RGB_image_buf, u_char * image_buf, int64_t color_filter, int64_t payload_size) {
+  void capture_device(std::string topic, GX_DEV_HANDLE gx_dev_handle, u_char * RGB_image_buf, u_char * image_buf, int64_t color_filter, int64_t payload_size) {
 
-    if (!*triggered)
-      return;
-
-    *triggered = false;
-
-    auto stamp = rclcpp::Clock().now();
-    // auto stamp = this->trigger_timestamp_;
+    auto stamp = this->trigger_timestamp_;
     GX_STATUS status = GX_STATUS_SUCCESS;
     PGX_FRAME_BUFFER frame_buffer = NULL;
 
@@ -623,8 +656,12 @@ private:
 
       // Initialize a shared pointer to an Image message.
       auto msg = std::make_unique<sensor_msgs::msg::Image>();
-      msg->header.stamp = stamp;
-      msg->header.frame_id = device_sn_;
+      msg->header.stamp = stamp + rclcpp::Duration(0,get_parameter("exposure_time").as_double()*1000);
+      if (!trigger_source_.empty()) {
+        msg->header.frame_id = trigger_source_;
+      } else {
+        msg->header.frame_id = device_sn_;
+      }
       msg->is_bigendian = false;
       msg->height = frame_buffer->nHeight;
       msg->width = frame_buffer->nWidth;
@@ -664,6 +701,10 @@ private:
         return;
       }
       frame_count_++;
+      auto msg_stamp = msg->header.stamp;
+      // RCLCPP_INFO(get_logger(), "trigger_timestamp: %ld msg->header.stamp: %d.%d",
+      //     trigger_timestamp_.nanoseconds(),
+      //     msg_stamp.sec, msg_stamp.nanosec);
       pub_.publish(*std::move(msg),camera_info_);
     }
 
@@ -671,7 +712,6 @@ private:
     if (status != GX_STATUS_SUCCESS) {
       auto error_msg = GetErrorString(status);
       RCLCPP_ERROR(this->get_logger(), "%s error GXQBuf: %s", topic.c_str(), error_msg);
-      return;
     }
   }
 };

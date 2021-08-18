@@ -22,8 +22,8 @@ def generate_launch_description():
                 # {'image_encoding': 'BAYER_RGGB8'}]
               #  {'image_encoding': 'RGB8'}]
 
-  container1 = ComposableNodeContainer(
-    name='stereo_image_container',
+  left = ComposableNodeContainer(
+    name='left_image_container',
     namespace='',
     package='rclcpp_components',
     executable='component_container',
@@ -34,13 +34,35 @@ def generate_launch_description():
         name='left_image_pub',
         parameters=left_params
       ),
+    ]
+  )
+  right = ComposableNodeContainer(
+    name='right_image_container',
+    namespace='',
+    package='rclcpp_components',
+    executable='component_container',
+    composable_node_descriptions=[
       ComposableNode(
         package='galaxy_camera_u3v',
         plugin='camera::U3vImagePub',
         name='right_image_pub',
         parameters=right_params
-      )
+      ),
+    ]
+  )
+  trigger = ComposableNodeContainer(
+    name='trigger_container',
+    namespace='',
+    package='rclcpp_components',
+    executable='component_container',
+    composable_node_descriptions=[
+      ComposableNode(
+        package='galaxy_camera_u3v',
+        plugin='camera::CaptureTrigger',
+        name='capture_trigger',
+        parameters=[{'trigger_hz': 30}]
+      ),
     ]
   )
 
-  return launch.LaunchDescription([container1])
+  return launch.LaunchDescription([trigger, left, right])
