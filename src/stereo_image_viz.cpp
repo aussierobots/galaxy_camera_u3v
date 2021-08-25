@@ -29,6 +29,7 @@ public:
   : Node("stereo_image_viz", rclcpp::NodeOptions(options).use_intra_process_comms(true))
   {
     auto qos = rclcpp::SensorDataQoS();
+    qos.reliable();
     // auto qos = rclcpp::ServicesQoS();
 
     auto img_viz = [this](sensor_msgs::msg::Image::ConstSharedPtr img_msg, std::string window_name){

@@ -15,6 +15,7 @@ public:
   : Node("capture_trigger", rclcpp::NodeOptions(options).use_intra_process_comms(true))
   {
     auto qos = rclcpp::SensorDataQoS();
+    qos.reliable();
 
     trigger_pub_ = this->create_publisher<sensor_msgs::msg::TimeReference>("capture_trigger", qos);
     auto trigger_hz = declare_parameter<int8_t>("trigger_hz", 30);

@@ -38,13 +38,14 @@ public:
   : Node("u3v_image_pub", rclcpp::NodeOptions(options).use_intra_process_comms(true)),
   // : Node("u3v_image_pub", options),
 
-  camera_info_url_("file://install/galaxy_camera_u3v/share/galaxy_camera_u3v/camera_info/${NAME}.yaml")
+  camera_info_url_("package://galaxy_camera_u3v/camera_info/${NAME}.yaml")
 
   {
     // this flag is used control if certain parameters can be updated
     is_initialising_ = true;
 
     auto qos = rclcpp::SensorDataQoS();
+    qos.reliable();
     // auto qos = rclcpp::ServicesQoS();
 
     // ros2 parameter call backs
