@@ -59,6 +59,18 @@ public:
 
     match_img_n_ = 0;
 
+    // setup run timestamp string
+    time_t rawtime;
+    struct tm * timeinfo;
+    char buffer[80];
+
+    std::time(&rawtime);
+    timeinfo = localtime(&rawtime);
+
+    strftime(buffer, sizeof(buffer), "%Y%m%d%H%M%S", timeinfo);
+    run_ts_ = std::string(buffer);
+
+
     capture_stereo_timer_ = create_wall_timer(100ms, std::bind(&CalibStereoImageCap::capture_stereo_callback, this));
 
     auto img_viz_cap = [this](sensor_msgs::msg::Image::ConstSharedPtr img_msg, std::string window_name, CameraFrame camera_frame){
@@ -211,6 +223,7 @@ private:
   rclcpp::TimerBase::SharedPtr capture_stereo_timer_;
 
   std::string image_path_;
+  std::string run_ts_;
   std::string size_;
   uint8_t rows_;
   uint8_t columns_;
@@ -246,11 +259,11 @@ private:
       }
       RCLCPP_INFO_ONCE(get_logger(), "have first left frame and right frame ..");
 
-      auto left_stamp = left_frame_->img_msg->header.stamp;
-      auto right_stamp = right_frame_->img_msg->header.stamp;
+      auto left_time = rclcpp::Time(left_frame_->img_msg->header.stamp);
+      auto right_time = rclcpp::Time(right_frame_->img_msg->header.stamp);
 
-      auto stamp_diff = rclcpp::Time(left_stamp)-rclcpp::Time(right_stamp);
-      if (stamp_diff > 10ms) {
+      auto stamp_diff = rclcpp::Time(left_time)-rclcpp::Time(right_time);
+      if (abs(stamp_diff.nanoseconds()) > 50000000) {
         // if time stamps arent close - lets wait till they are
         continue;
       }
@@ -267,6 +280,8 @@ private:
        && match_img_n_ > 0) {
          continue;
       }
+
+      RCLCPP_INFO(get_logger(),"stamp_diff(ns): %ld left_time: %f right_time: %f ", stamp_diff.nanoseconds(), left_time.seconds(), right_time.seconds());
 
       cv::Size size (left_frame_->img_msg->width, left_frame_->img_msg->height); // right is the same
 
@@ -293,9 +308,9 @@ private:
 
       std::stringstream ss;
       ss << std::setw(4) << std::setfill('0') << match_img_n_;
-      std::string left_file = image_path_+"/left-"+ss.str()+".webp";
+      std::string left_file = image_path_+"/"+run_ts_+"-"+ss.str()+"-left.webp";
       cv::imwrite(left_file, left_frame_->img, write_params);
-      std::string right_file = image_path_+"/right-"+ss.str()+".webp";
+      std::string right_file = image_path_+"/"+run_ts_+"-"+ss.str()+"-right.webp";
       cv::imwrite(right_file, right_frame_->img, write_params);
 
       RCLCPP_INFO(get_logger(), "%s %s %s", ss.str().c_str(), left_file.c_str(), right_file.c_str());
