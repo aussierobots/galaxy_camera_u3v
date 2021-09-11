@@ -14,7 +14,7 @@
 #include <opencv2/imgproc/imgproc.hpp>
 #include <opencv2/highgui/highgui.hpp>
 #include <opencv2/calib3d.hpp>
-
+#include <opencv2/aruco/charuco.hpp>
 
 
 using namespace std::chrono_literals;
@@ -26,14 +26,19 @@ namespace enc = sensor_msgs::image_encodings;
 namespace camera {
 
 enum CameraFrame {left_frame, right_frame};
+enum Calibration {chessboard, ChArUco};
 
 struct FrameData {
+  Calibration calibration;
   CameraFrame camera_frame;
   cv::Size pattersize;
   sensor_msgs::msg::Image::ConstSharedPtr img_msg;
   cv::Mat img;
   bool pattern_found;
   vector<cv::Point2f> corners;
+  vector<vector<cv::Point2f>> marker_corners;
+  vector<int> marker_ids;
+  vector<int> charuco_ids;
 };
 
 class CalibStereoImageCap: public rclcpp::Node
@@ -48,16 +53,38 @@ public:
 
     image_path_ = declare_parameter<std::string>("image_path","/tmp");
     size_ = declare_parameter<std::string>("size","10x7");
-
     string size_str(size_);
     char *token1 = strtok(const_cast<char *>(size_str.c_str()),"x");
     columns_ = atoi(token1);
     rows_ = atoi(strtok(NULL,"x"));
 
+    square_length_ = declare_parameter<float>("square_length", .30f);
+    marker_length_ = declare_parameter<float>("marker_length", .23f);
+
+    auto calibration_p = declare_parameter<std::string>("calibration", "chessboard");
+    if (calibration_p.compare("chessboard") == 0) {
+      calibration_ = Calibration::chessboard;
+      RCLCPP_INFO(get_logger(), "chessboard calibration detection");
+    } else if (calibration_p.compare("ChArUco") == 0) {
+      calibration_ = Calibration::ChArUco;
+      RCLCPP_INFO(get_logger(), "ChArUco calibration detection");
+       cv::Ptr<cv::aruco::Dictionary> dictionary = cv::aruco::getPredefinedDictionary(cv::aruco::DICT_4X4_250);
+       board_ = cv::aruco::CharucoBoard::create(rows_, columns_,square_length_, marker_length_, dictionary);
+       aruco_params_ = cv::aruco::DetectorParameters::create();
+       aruco_params_->cornerRefinementMethod = cv::aruco::CORNER_REFINE_NONE;
+    } else {
+      RCLCPP_ERROR(get_logger(), "unknown calibration parameter: %s exiting...", calibration_p.c_str());
+      exit(-1);
+    }
+
     RCLCPP_INFO(get_logger(),"starting - image_path: %s size: %s (columns = %d, rows = %d)",
       image_path_.c_str(), size_.c_str(), columns_, rows_);
 
     match_img_n_ = 0;
+
+    // webp parameters for imwrite
+    webp_write_params_.push_back(cv::IMWRITE_WEBP_QUALITY);
+    webp_write_params_.push_back(100);
 
     // setup run timestamp string
     time_t rawtime;
@@ -141,44 +168,66 @@ public:
       }
 
       // RCLCPP_INFO(get_logger(),"%s cv::Mat img - type(): %d total(): %ld", window_name.c_str(), img.type(), img.total());
-
-      // detect chessboard
-      cv::Size patternsize(columns_, rows_);
       vector<cv::Point2f> corners;
-      int flags = cv::CALIB_CB_ADAPTIVE_THRESH + cv::CALIB_CB_NORMALIZE_IMAGE + cv::CALIB_CB_FAST_CHECK;
-      bool pattern_found = cv::findChessboardCorners(gray, patternsize, corners, flags);
+      vector<vector<cv::Point2f>> marker_corners;
+      vector<int> marker_ids;
+      vector<int> charuco_ids;
+      cv::Size patternsize(columns_, rows_);
 
-      if (pattern_found) {
-        cv::cornerSubPix(gray, corners, cv::Size(11, 11), cv::Size(-1, -1),
-        cv::TermCriteria(cv::TermCriteria::EPS + cv::TermCriteria::MAX_ITER, 30, 0.1));
+      if (calibration_ == Calibration::chessboard) {
+        // detect chessboard
+        int flags = cv::CALIB_CB_ADAPTIVE_THRESH + cv::CALIB_CB_NORMALIZE_IMAGE + cv::CALIB_CB_FAST_CHECK;
+        bool pattern_found = cv::findChessboardCorners(gray, patternsize, corners, flags);
 
-        // add to frame_queue to process later
-        FrameData frame_data = {camera_frame, patternsize, img_msg, img.clone(), pattern_found, corners};
-        frame_queue_.push_back(std::make_shared<FrameData>(frame_data));
+        if (pattern_found) {
+          cv::cornerSubPix(gray, corners, cv::Size(11, 11), cv::Size(-1, -1),
+              cv::TermCriteria(cv::TermCriteria::EPS + cv::TermCriteria::MAX_ITER, 30, 0.1));
+
+          // add to frame_queue to process later
+          FrameData frame_data = {calibration_, camera_frame, patternsize, img_msg, img.clone(), pattern_found, corners, marker_corners, marker_ids, charuco_ids};
+          frame_queue_.push_back(std::make_shared<FrameData>(frame_data));
+        }
+
+        cv::drawChessboardCorners(gray, patternsize, cv::Mat(corners), pattern_found);
+
+      } else if (calibration_ == Calibration::ChArUco) {
+        cv::aruco::detectMarkers(img, board_->dictionary, marker_corners, marker_ids, aruco_params_);
+
+        if (marker_ids.size() > 0 ) {
+          bool pattern_found = true;
+          cv::aruco::interpolateCornersCharuco(marker_corners, marker_ids, gray, board_, corners, charuco_ids);
+          // add to frame_queue to process later
+          FrameData frame_data = {calibration_, camera_frame, patternsize, img_msg, img.clone(), pattern_found, corners, marker_corners, marker_ids, charuco_ids};
+          frame_queue_.push_back(std::make_shared<FrameData>(frame_data));
+
+          cv::aruco::drawDetectedMarkers(img, marker_corners, marker_ids);
+          // if at least one charuco corner detected
+          if (charuco_ids.size() > 0)
+              cv::aruco::drawDetectedCornersCharuco(img, corners, charuco_ids, cv::Scalar(255, 0, 0));
+        }
       }
-
-      cv::drawChessboardCorners(img, patternsize, cv::Mat(corners), pattern_found);
 
       // display results
 
       cv::Mat img_d;
-      cv::Mat gray_d;
+      // cv::Mat gray_d;
 
       cv::resize(img, img_d, cv::Size(img_msg->width/2, img_msg->height/2), cv::INTER_LINEAR);
-      cv::resize(gray, gray_d, cv::Size(img_msg->width/2, img_msg->height/2), cv::INTER_LINEAR);
+      // cv::resize(gray, gray_d, cv::Size(img_msg->width/2, img_msg->height/2), cv::INTER_LINEAR);
 
       cv::putText(img_d, img_msg->encoding, cv::Point(10,30), cv::FONT_HERSHEY_COMPLEX,1,cv::Scalar(255.0,0.0,0.0));
       cv::putText(img_d, stampTimeStream.str(), cv::Point(10,60), cv::FONT_HERSHEY_COMPLEX,1,cv::Scalar(255.0,0.0,0.0));
-      cv::namedWindow(window_name, cv::WINDOW_AUTOSIZE);
+      cv::namedWindow(window_name, cv::WINDOW_GUI_EXPANDED);
       cv::Mat disp_img;
-      cv::Mat gray_c3;
-      cv::cvtColor(gray_d, gray_c3, cv::COLOR_GRAY2BGR, 3);
+      // cv::Mat gray_c3;
+      // cv::cvtColor(gray_d, gray_c3, cv::COLOR_GRAY2BGR, 3);
       // RCLCPP_INFO(get_logger(), " img_d.type(): %d img_d.dims: %d img_d.rows: %d gray_c3.type(): %d  gray_c3.dims: %d gray_c3.rows: %d",
       //         img_d.type(), img_d.dims, img_d.rows,
       //         gray_c3.type(), gray_c3.dims, gray_c3.rows);
 
-      cv::vconcat(img_d, gray_c3, disp_img);
-      cv::imshow(window_name, disp_img);
+      // cv::vconcat(img_d, gray_c3, disp_img);
+      // cv::imshow(window_name, disp_img);
+      cv::imshow(window_name, img_d);
       // auto window_name_gray = window_name+" gray";
       // cv::namedWindow(window_name_gray, cv::WINDOW_AUTOSIZE);
       // cv::imshow(window_name_gray, gray_d);
@@ -227,6 +276,8 @@ private:
   std::string size_;
   uint8_t rows_;
   uint8_t columns_;
+  float square_length_; // in meters
+  float marker_length_; // in meters
 
   std::deque<std::shared_ptr<camera::FrameData>> frame_queue_;
 
@@ -234,6 +285,12 @@ private:
   std::shared_ptr<camera::FrameData> right_frame_, right_frame_prev_;
 
   u_int32_t match_img_n_;
+
+  std::vector<int> webp_write_params_;
+
+  Calibration calibration_;
+  cv::Ptr<cv::aruco::CharucoBoard> board_;
+  cv::Ptr<cv::aruco::DetectorParameters> aruco_params_;
 
   CAMERA_LOCAL
   void capture_stereo_callback () {
@@ -286,9 +343,23 @@ private:
       cv::Size size (left_frame_->img_msg->width, left_frame_->img_msg->height); // right is the same
 
       cv::Mat img_lc(left_frame_->img.clone());
-      cv::drawChessboardCorners(img_lc, left_frame_->pattersize, cv::Mat(left_frame_->corners), left_frame_->pattern_found);
+      if (left_frame_->calibration == Calibration::chessboard) {
+        cv::drawChessboardCorners(img_lc, left_frame_->pattersize, cv::Mat(left_frame_->corners), left_frame_->pattern_found);
+      } else if (left_frame_->calibration == Calibration::ChArUco) {
+          cv::aruco::drawDetectedMarkers(img_lc, left_frame_->marker_corners, left_frame_->marker_ids);
+          // if at least one charuco corner detected
+          if (left_frame_->charuco_ids.size() > 0)
+              cv::aruco::drawDetectedCornersCharuco(img_lc, left_frame_->corners, left_frame_->charuco_ids, cv::Scalar(255, 0, 0));
+      }
       cv::Mat img_rc(right_frame_->img.clone());
-      cv::drawChessboardCorners(img_rc, right_frame_->pattersize, cv::Mat(right_frame_->corners), right_frame_->pattern_found);
+      if (right_frame_->calibration == Calibration::chessboard) {
+        cv::drawChessboardCorners(img_rc, right_frame_->pattersize, cv::Mat(right_frame_->corners), right_frame_->pattern_found);
+      } else if (right_frame_->calibration == Calibration::ChArUco) {
+          cv::aruco::drawDetectedMarkers(img_rc, right_frame_->marker_corners, right_frame_->marker_ids);
+          // if at least one charuco corner detected
+          if (right_frame_->charuco_ids.size() > 0)
+              cv::aruco::drawDetectedCornersCharuco(img_rc, right_frame_->corners, right_frame_->charuco_ids, cv::Scalar(255, 0, 0));
+      }
 
       cv::Mat img_l, img_r, img_d;
 
@@ -302,16 +373,12 @@ private:
       cv::imshow(window_name, img_d);
       cv::waitKey(1000/FRAME_RATE);
 
-      std::vector<int> write_params;
-      write_params.push_back(cv::IMWRITE_WEBP_QUALITY);
-      write_params.push_back(100);
-
       std::stringstream ss;
       ss << std::setw(4) << std::setfill('0') << match_img_n_;
       std::string left_file = image_path_+"/"+run_ts_+"-"+ss.str()+"-left.webp";
-      cv::imwrite(left_file, left_frame_->img, write_params);
+      cv::imwrite(left_file, left_frame_->img, webp_write_params_);
       std::string right_file = image_path_+"/"+run_ts_+"-"+ss.str()+"-right.webp";
-      cv::imwrite(right_file, right_frame_->img, write_params);
+      cv::imwrite(right_file, right_frame_->img, webp_write_params_);
 
       RCLCPP_INFO(get_logger(), "%s %s %s", ss.str().c_str(), left_file.c_str(), right_file.c_str());
 
