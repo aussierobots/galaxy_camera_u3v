@@ -52,14 +52,14 @@ public:
     qos.reliable();
 
     image_path_ = declare_parameter<std::string>("image_path","/tmp");
-    size_ = declare_parameter<std::string>("size","10x7");
+    size_ = declare_parameter<std::string>("size","11x7");
     string size_str(size_);
     char *token1 = strtok(const_cast<char *>(size_str.c_str()),"x");
     columns_ = atoi(token1);
     rows_ = atoi(strtok(NULL,"x"));
 
-    square_length_ = declare_parameter<float>("square_length", .30f);
-    marker_length_ = declare_parameter<float>("marker_length", .23f);
+    square_length_ = declare_parameter<float>("square_length", .65f);
+    marker_length_ = declare_parameter<float>("marker_length", .51f);
 
     auto calibration_p = declare_parameter<std::string>("calibration", "chessboard");
     if (calibration_p.compare("chessboard") == 0) {
@@ -68,7 +68,7 @@ public:
     } else if (calibration_p.compare("ChArUco") == 0) {
       calibration_ = Calibration::ChArUco;
       RCLCPP_INFO(get_logger(), "ChArUco calibration detection");
-       cv::Ptr<cv::aruco::Dictionary> dictionary = cv::aruco::getPredefinedDictionary(cv::aruco::DICT_4X4_250);
+       cv::Ptr<cv::aruco::Dictionary> dictionary = cv::aruco::getPredefinedDictionary(cv::aruco::DICT_6X6_100);
        board_ = cv::aruco::CharucoBoard::create(rows_, columns_,square_length_, marker_length_, dictionary);
        aruco_params_ = cv::aruco::DetectorParameters::create();
        aruco_params_->cornerRefinementMethod = cv::aruco::CORNER_REFINE_NONE;
