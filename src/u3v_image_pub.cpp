@@ -716,6 +716,6 @@ private:
     }
   }
 };
-} // end namespace car_capture
+} // end namespace camera
 
 RCLCPP_COMPONENTS_REGISTER_NODE(camera::U3vImagePub)
