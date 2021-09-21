@@ -132,22 +132,22 @@ public:
 
       if (raw_type == CV_16UC1) {
 
-        bayer_u8_data.resize(img_msg->height * img_msg->width);
-        auto bayer_16uc1 = cv::Mat(img_msg->height, img_msg->width, raw_type, img_buf_u8_p, img_msg->step);
-        bayer_16uc1.forEach<uint16_t>(
-          [&bayer_u8_data,img_msg](uint16_t &v, const int *position){
+        // bayer_u8_data.resize(img_msg->height * img_msg->width);
+        // auto bayer_16uc1 = cv::Mat(img_msg->height, img_msg->width, raw_type, img_buf_u8_p, img_msg->step);
+        // bayer_16uc1.forEach<uint16_t>(
+        //   [&bayer_u8_data,img_msg](uint16_t &v, const int *position){
 
-            auto bit_extract = [] (uint16_t value, int begin, int end) {
-                uint16_t mask = (1 << (end - begin)) - 1;
-                return (value >> begin) & mask;
-            };
+        //     auto bit_extract = [] (uint16_t value, int begin, int end) {
+        //         uint16_t mask = (1 << (end - begin)) - 1;
+        //         return (value >> begin) & mask;
+        //     };
 
-            bayer_u8_data[(position[0]*img_msg->width) +position[1]]=bit_extract(v, 2, 10) ;
-          }
-        );
+        //     bayer_u8_data[(position[0]*img_msg->width) +position[1]]=bit_extract(v, 2, 10) ;
+        //   }
+        // );
 
-        raw = cv::Mat(img_msg->height, img_msg->width, CV_8UC1, &bayer_u8_data.data()[0], img_msg->step/2);
-
+        // raw = cv::Mat(img_msg->height, img_msg->width, CV_8UC1, &bayer_u8_data.data()[0], img_msg->step/2);
+        raw = cv::Mat(img_msg->height, img_msg->width, raw_type, img_buf_u8_p, img_msg->step);
       } else {
         raw = cv::Mat(img_msg->height, img_msg->width, raw_type,
                       img_buf_u8_p, img_msg->step);
@@ -164,7 +164,10 @@ public:
       cv::cvtColor(raw, img, img_code);
       cv::cvtColor(raw, gray, gray_code);
       if (img.type() == CV_16UC3) {
-        img.convertTo(img, CV_8UC3, 0.0625);
+        // img.convertTo(img, CV_8UC3, 0.0625);
+        cv::Mat img_scaled;
+        cv::convertScaleAbs(img, img_scaled);
+        img_scaled.copyTo(img);
       }
 
       // RCLCPP_INFO(get_logger(),"%s cv::Mat img - type(): %d total(): %ld", window_name.c_str(), img.type(), img.total());
