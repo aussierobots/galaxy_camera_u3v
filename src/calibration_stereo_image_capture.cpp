@@ -162,13 +162,18 @@ public:
       cv::Mat gray(img_msg->height, img_msg->width, CV_8UC1);
       // RCLCPP_INFO(get_logger(),"%s cv::Mat img - type(): %d total(): %ld", window_name.c_str(), img.type(), img.total());
       cv::cvtColor(raw, img, img_code);
-      cv::cvtColor(raw, gray, gray_code);
       if (img.type() == CV_16UC3) {
-        // img.convertTo(img, CV_8UC3, 0.0625);
         cv::Mat img_scaled;
         cv::convertScaleAbs(img, img_scaled);
         img_scaled.copyTo(img);
       }
+      cv::cvtColor(raw, gray, gray_code);
+      if (gray.type() == CV_16UC1) {
+        cv::Mat gray_scaled;
+        cv::convertScaleAbs(gray, gray_scaled);
+        gray_scaled.copyTo(gray);
+      }
+
 
       // RCLCPP_INFO(get_logger(),"%s cv::Mat img - type(): %d total(): %ld", window_name.c_str(), img.type(), img.total());
       vector<cv::Point2f> corners;
