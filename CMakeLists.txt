@@ -34,7 +34,6 @@ add_library(camera_components SHARED
   src/capture_trigger.cpp
   src/stereo_image_viz.cpp
   src/calibration_stereo_image_capture.cpp
-  src/stereo_frame_capture.cpp
 )
 
 target_compile_definitions(camera_components
@@ -58,7 +57,6 @@ rclcpp_components_register_node(camera_components PLUGIN "camera::U3vImagePub" E
 rclcpp_components_register_node(camera_components PLUGIN "camera::CaptureTrigger" EXECUTABLE capture_trigger)
 rclcpp_components_register_node(camera_components PLUGIN "camera::StereoImageViz" EXECUTABLE stereo_image_viz)
 rclcpp_components_register_node(camera_components PLUGIN "camera::CalibStereoImageCap" EXECUTABLE calib_stereo_image_cap)
-rclcpp_components_register_node(camera_components PLUGIN "stereo_capture::StereoFrameCap" EXECUTABLE stereo_frame_capture)
 
 install(TARGETS
   camera_components
