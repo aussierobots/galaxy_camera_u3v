@@ -26,9 +26,9 @@ using namespace std::chrono_literals;
 #define BAYER_ENCODING "BAYER"
 
 namespace camera {
+
 //
-// this is a read only camera publisher - the stereo_capture_ctl inits and updates
-// the camera settings
+// this is a read only camera publisher
 //
 class U3vImagePub: public rclcpp::Node
 {
@@ -39,17 +39,20 @@ public:
   // : Node("u3v_image_pub", options),
 
   camera_info_url_("package://galaxy_camera_u3v/camera_info/${NAME}.yaml")
-
   {
     // this flag is used control if certain parameters can be updated
     is_initialising_ = true;
 
     auto qos = rclcpp::SensorDataQoS();
     qos.reliable();
-    // auto qos = rclcpp::ServicesQoS();
 
     // ros2 parameter call backs
     parameters_callback_handle_ = this->add_on_set_parameters_callback(std::bind(&U3vImagePub::on_set_parameters_callback, this, std::placeholders::_1));
+
+    acquisition_role_ = this->declare_parameter<std::string>("acquisition_role","standalone");
+    RCLCPP_INFO(this->get_logger(), "starting with acquisition role: %s on thread: %s", acquisition_role_.c_str(), string_thread_id().c_str());
+
+    // determine the acquisition role this camera plays - there is a leader and followers
 
     // initial camera info
     topic_ = this->declare_parameter<std::string>("topic","stereo/right");
@@ -172,8 +175,21 @@ public:
 
     // camera parameters - these are the default values. Values will be set on the camera if appropriate
     this->declare_parameter<int64_t>("acquisition_mode", GX_ACQ_MODE_CONTINUOUS);
-    this->declare_parameter<int64_t>("trigger_mode",GX_TRIGGER_MODE_OFF);
-    this->declare_parameter<int64_t>("trigger_source",GX_TRIGGER_SOURCE_SOFTWARE);
+    // leader send the trigger out on line2 for the followers (hard wired)
+    if (acquisition_role_.compare("leader") == 0) {
+      this->declare_parameter<int64_t>("trigger_mode",GX_TRIGGER_MODE_OFF);
+      // this->declare_parameter<int64_t>("trigger_source",GX_TRIGGER_SOURCE_SOFTWARE);
+      this->declare_parameter<int64_t>("line_selector", GX_ENUM_LINE_SELECTOR_LINE2);
+      this->declare_parameter<int64_t>("line_mode", GX_ENUM_LINE_MODE_OUTPUT);
+      // this->declare_parameter<int64_t>("line_source", GX_ENUM_LINE_SOURCE_STROBE);
+      this->declare_parameter<int64_t>("line_source", GX_ENUM_LINE_SOURCE_TIMER1_ACTIVE);
+    }
+    if (acquisition_role_.compare("follower") == 0) {
+      this->declare_parameter<int64_t>("trigger_mode",GX_TRIGGER_MODE_ON);
+      this->declare_parameter<int64_t>("trigger_source",GX_TRIGGER_SOURCE_LINE3);
+      this->declare_parameter<int64_t>("line_selector", GX_ENUM_LINE_SELECTOR_LINE3);
+      this->declare_parameter<int64_t>("line_mode", GX_ENUM_LINE_MODE_INPUT);
+    }
     this->declare_parameter<int64_t>("exposure_mode", GX_EXPOSURE_MODE_TIMED);
     this->declare_parameter<double_t>("exposure_time", 100.0);
     this->declare_parameter<int64_t>("exposure_auto", GX_EXPOSURE_AUTO_CONTINUOUS);
@@ -181,8 +197,8 @@ public:
     this->declare_parameter<double_t>("auto_exposure_time_max", 1000000.0); //microseconds
     this->declare_parameter<int64_t>("expected_gray_value", 120);
     this->declare_parameter<int64_t>("acquisition_frame_rate_mode",GX_ACQUISITION_FRAME_RATE_MODE_ON);
-    this->declare_parameter<double_t>("acquisition_frame_rate", 56.0);
-    // this->declare_parameter<double_t>("acquisition_frame_rate", 30.0);
+    // this->declare_parameter<double_t>("acquisition_frame_rate", 56.0);
+    this->declare_parameter<double_t>("acquisition_frame_rate", 30.0);
     this->declare_parameter<double_t>("current_acquisition_frame_rate",0.0);
     this->declare_parameter<double_t>("gain",0.0); // read only - gets updated periodically
     this->declare_parameter<int64_t>("gain_auto", GX_GAIN_AUTO_CONTINUOUS);
@@ -222,7 +238,8 @@ public:
 
     param_timer_ = this->create_wall_timer(1s, std::bind(&U3vImagePub::param_timer_callback, this));
 
-    capture_timer_ = this->create_wall_timer(10ns, std::bind(&U3vImagePub::capture_timer_callback, this));
+    callback_group_capture_timer_ = create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
+    capture_timer_ = this->create_wall_timer(10ms, std::bind(&U3vImagePub::capture_timer_callback, this), callback_group_capture_timer_);
 
     // just use for testing - trigger should come from the controller
     // auto frame_duration = 1000000us/FRAME_RATE;
@@ -251,6 +268,10 @@ public:
 
 private:
   bool is_initialising_;
+
+  std::string acquisition_role_; // camera maybe a leader or a follower
+
+  rclcpp::CallbackGroup::SharedPtr callback_group_capture_timer_;
 
   rclcpp::node_interfaces::OnSetParametersCallbackHandle::SharedPtr parameters_callback_handle_;
   rclcpp::TimerBase::SharedPtr frame_timer_;
@@ -306,118 +327,144 @@ private:
     result.successful = true;
     for (const rclcpp::Parameter &parameter: parameters){
 
-      if (parameter.get_name() == "pixel_format" &&
+      if (parameter.get_name() == "acquisition_role" &&
+          parameter.get_type() == rclcpp::ParameterType::PARAMETER_STRING){
+        if (!acquisition_role_.empty()) {
+          result.successful = false;
+          result.reason = "acquisition_role can't be changed, once set!";
+        } else {
+          if (!parameter.as_string().compare("leader") == 0
+           && !parameter.as_string().compare("follower") == 0
+           && !parameter.as_string().compare("standalone") == 0){
+            result.successful = false;
+            result.reason = "acquisition_role can be either standalone, leader or follower!";
+          }
+        }
+      }
+      else if (parameter.get_name() == "pixel_format" &&
           parameter.get_type() ==  rclcpp::ParameterType::PARAMETER_INTEGER){
           result = param_gx_set_enum(GX_ENUM_PIXEL_FORMAT, parameter.as_int());
           update_payload_size();
       }
-      if (parameter.get_name() == "image_encoding" &&
+      else if (parameter.get_name() == "image_encoding" &&
           parameter.get_type() ==  rclcpp::ParameterType::PARAMETER_STRING){
           image_encoding_ = parameter.as_string();
       }
-      if (parameter.get_name() == "topic" &&
+      else if (parameter.get_name() == "topic" &&
           parameter.get_type() == rclcpp::ParameterType::PARAMETER_STRING){
         if (!topic_.empty()) {
           result.successful = false;
           result.reason = "topic can't be changed, once set!";
         }
       }
-      if (parameter.get_name() == "device_sn" &&
+      else if (parameter.get_name() == "device_sn" &&
           parameter.get_type() == rclcpp::ParameterType::PARAMETER_STRING){
         if (!device_sn_.empty()) {
           result.successful = false;
           result.reason = "device_sn can't be changed, once set!";
         }
       }
-      if (parameter.get_name() == "acquisition_mode" &&
+      else if (parameter.get_name() == "acquisition_mode" &&
           parameter.get_type() == rclcpp::ParameterType::PARAMETER_INTEGER) {
           result = param_gx_set_enum(GX_ENUM_ACQUISITION_MODE, parameter.as_int());
       }
-      if (parameter.get_name() == "trigger_mode" &&
+      else if (parameter.get_name() == "trigger_mode" &&
           parameter.get_type() == rclcpp::ParameterType::PARAMETER_INTEGER) {
           result = param_gx_set_enum(GX_ENUM_TRIGGER_MODE, parameter.as_int());
       }
-      if (parameter.get_name() == "trigger_source" &&
+      else if (parameter.get_name() == "trigger_source" &&
           parameter.get_type() == rclcpp::ParameterType::PARAMETER_INTEGER) {
           result = param_gx_set_enum(GX_ENUM_TRIGGER_SOURCE, parameter.as_int());
       }
-      if (parameter.get_name() == "exposure_mode" &&
+      else if (parameter.get_name() == "line_selector" &&
+          parameter.get_type() == rclcpp::ParameterType::PARAMETER_INTEGER) {
+          result = param_gx_set_enum(GX_ENUM_LINE_SELECTOR, parameter.as_int());
+      }
+      else if (parameter.get_name() == "line_mode" &&
+          parameter.get_type() == rclcpp::ParameterType::PARAMETER_INTEGER) {
+          result = param_gx_set_enum(GX_ENUM_LINE_MODE, parameter.as_int());
+      }
+      else if (parameter.get_name() == "line_source" &&
+          parameter.get_type() == rclcpp::ParameterType::PARAMETER_INTEGER) {
+          result = param_gx_set_enum(GX_ENUM_LINE_SOURCE, parameter.as_int());
+      }
+      else if (parameter.get_name() == "exposure_mode" &&
           parameter.get_type() == rclcpp::ParameterType::PARAMETER_INTEGER) {
           result = param_gx_set_enum(GX_ENUM_EXPOSURE_MODE, parameter.as_int());
       }
-      if (parameter.get_name() == "exposure_time" &&
+      else if (parameter.get_name() == "exposure_time" &&
           parameter.get_type() == rclcpp::ParameterType::PARAMETER_DOUBLE) {
           result = param_gx_set_float(GX_FLOAT_EXPOSURE_TIME, parameter.as_double());
       }
-      if (parameter.get_name() == "exposure_auto" &&
+      else if (parameter.get_name() == "exposure_auto" &&
           parameter.get_type() == rclcpp::ParameterType::PARAMETER_INTEGER) {
           result = param_gx_set_enum(GX_ENUM_EXPOSURE_AUTO, parameter.as_int());
       }
-      if (parameter.get_name() == "auto_exposure_time_min" &&
+      else if (parameter.get_name() == "auto_exposure_time_min" &&
           parameter.get_type() == rclcpp::ParameterType::PARAMETER_DOUBLE) {
           result = param_gx_set_float(GX_FLOAT_AUTO_EXPOSURE_TIME_MIN, parameter.as_double());
       }
-      if (parameter.get_name() == "auto_exposure_time_max" &&
+      else if (parameter.get_name() == "auto_exposure_time_max" &&
           parameter.get_type() == rclcpp::ParameterType::PARAMETER_DOUBLE) {
           result = param_gx_set_float(GX_FLOAT_AUTO_EXPOSURE_TIME_MAX, parameter.as_double());
       }
-      if (parameter.get_name() == "expected_gray_value" &&
+      else if (parameter.get_name() == "expected_gray_value" &&
           parameter.get_type() == rclcpp::ParameterType::PARAMETER_INTEGER) {
           result = param_gx_set_int(GX_INT_GRAY_VALUE, parameter.as_int());
       }
-      if (parameter.get_name() == "acquisition_frame_rate_mode" &&
+      else if (parameter.get_name() == "acquisition_frame_rate_mode" &&
           parameter.get_type() == rclcpp::ParameterType::PARAMETER_INTEGER) {
           result = param_gx_set_enum(GX_ENUM_ACQUISITION_FRAME_RATE_MODE, parameter.as_int());
       }
-      if (parameter.get_name() == "acquisition_frame_rate" &&
+      else if (parameter.get_name() == "acquisition_frame_rate" &&
           parameter.get_type() == rclcpp::ParameterType::PARAMETER_DOUBLE) {
           result = param_gx_set_float(GX_FLOAT_ACQUISITION_FRAME_RATE, parameter.as_double());
       }
-      if (parameter.get_name() == "gain" &&
+      else if (parameter.get_name() == "gain" &&
           parameter.get_type() == rclcpp::ParameterType::PARAMETER_DOUBLE) {
           result = param_gx_set_float(GX_FLOAT_GAIN, parameter.as_double());
       }
-      if (parameter.get_name() == "gain_auto" &&
+      else if (parameter.get_name() == "gain_auto" &&
           parameter.get_type() == rclcpp::ParameterType::PARAMETER_INTEGER) {
           result = param_gx_set_enum(GX_ENUM_GAIN_AUTO, parameter.as_int());
       }
-      if (parameter.get_name() == "auto_gain_min" &&
+      else if (parameter.get_name() == "auto_gain_min" &&
           parameter.get_type() == rclcpp::ParameterType::PARAMETER_DOUBLE) {
           result = param_gx_set_float(GX_FLOAT_AUTO_GAIN_MIN, parameter.as_double());
       }
-      if (parameter.get_name() == "auto_gain_max" &&
+      else if (parameter.get_name() == "auto_gain_max" &&
           parameter.get_type() == rclcpp::ParameterType::PARAMETER_DOUBLE) {
           result = param_gx_set_float(GX_FLOAT_AUTO_GAIN_MAX, parameter.as_double());
       }
-      if (parameter.get_name() == "balance_ratio_selector" &&
+      else if (parameter.get_name() == "balance_ratio_selector" &&
           parameter.get_type() == rclcpp::ParameterType::PARAMETER_INTEGER) {
           result = param_gx_set_enum(GX_ENUM_BALANCE_RATIO_SELECTOR, parameter.as_int());
       }
-      if (parameter.get_name() == "balance_ratio" &&
+      else if (parameter.get_name() == "balance_ratio" &&
           parameter.get_type() == rclcpp::ParameterType::PARAMETER_DOUBLE) {
           result = param_gx_set_float(GX_FLOAT_BALANCE_RATIO, parameter.as_double());
       }
-      if (parameter.get_name() == "balance_white_auto" &&
+      else if (parameter.get_name() == "balance_white_auto" &&
           parameter.get_type() == rclcpp::ParameterType::PARAMETER_INTEGER) {
           result = param_gx_set_enum(GX_ENUM_BALANCE_WHITE_AUTO, parameter.as_int());
       }
-      if (parameter.get_name() == "awb_lamp_house" &&
+      else if (parameter.get_name() == "awb_lamp_house" &&
           parameter.get_type() == rclcpp::ParameterType::PARAMETER_INTEGER) {
           result = param_gx_set_enum(GX_ENUM_AWB_LAMP_HOUSE, parameter.as_int());
       }
-      if (parameter.get_name() == "awb_roi_width" &&
+      else if (parameter.get_name() == "awb_roi_width" &&
           parameter.get_type() == rclcpp::ParameterType::PARAMETER_INTEGER) {
           result = param_gx_set_int(GX_INT_AWBROI_WIDTH, parameter.as_int());
       }
-      if (parameter.get_name() == "awb_roi_height" &&
+      else if (parameter.get_name() == "awb_roi_height" &&
           parameter.get_type() == rclcpp::ParameterType::PARAMETER_INTEGER) {
           result = param_gx_set_int(GX_INT_AWBROI_HEIGHT, parameter.as_int());
       }
-      if (parameter.get_name() == "awb_roi_offset_x" &&
+      else if (parameter.get_name() == "awb_roi_offset_x" &&
           parameter.get_type() == rclcpp::ParameterType::PARAMETER_INTEGER) {
           result = param_gx_set_int(GX_INT_AWBROI_OFFSETX, parameter.as_int());
       }
-      if (parameter.get_name() == "awb_roi_offset_y" &&
+      else if (parameter.get_name() == "awb_roi_offset_y" &&
           parameter.get_type() == rclcpp::ParameterType::PARAMETER_INTEGER) {
           result = param_gx_set_int(GX_INT_AWBROI_OFFSETY, parameter.as_int());
       }
@@ -602,6 +649,11 @@ private:
 
   CAMERA_LOCAL
   void capture_trigger_callback(const sensor_msgs::msg::TimeReference::SharedPtr msg) {
+    if (acquisition_role_.compare("follower") == 0) {
+      RCLCPP_ERROR(this->get_logger(),"Unable to use software triggering on a camera with acquisition role follower!");
+      return;
+    }
+
     // if it was started in continuous and we receive capture trigger message enable it
     if (!trigger_mode()) {
       set_parameter(rclcpp::Parameter("trigger_mode", GX_TRIGGER_MODE_ON));
@@ -624,6 +676,7 @@ private:
 
   CAMERA_LOCAL
   void capture_timer_callback() {
+    RCLCPP_INFO_ONCE(this->get_logger(),"capture_timer_callback started on thread: %s", string_thread_id().c_str());
     trigger_timestamp_ = rclcpp::Clock().now();
     this->capture_device(topic_, gx_dev_handle_, RGB_image_buf_, image_buf_, color_filter_, payload_size_);
   }
@@ -657,7 +710,8 @@ private:
 
       // Initialize a shared pointer to an Image message.
       auto msg = std::make_unique<sensor_msgs::msg::Image>();
-      msg->header.stamp = stamp + rclcpp::Duration(0,get_parameter("exposure_time").as_double()*1000);
+      // msg->header.stamp = stamp + rclcpp::Duration(0,get_parameter("exposure_time").as_double()*1000);
+      msg->header.stamp = rclcpp::Clock().now();
       if (!trigger_source_.empty()) {
         msg->header.frame_id = trigger_source_;
       } else {
@@ -702,7 +756,7 @@ private:
         return;
       }
       frame_count_++;
-      auto msg_stamp = msg->header.stamp;
+      // auto msg_stamp = msg->header.stamp;
       // RCLCPP_INFO(get_logger(), "trigger_timestamp: %ld msg->header.stamp: %d.%d",
       //     trigger_timestamp_.nanoseconds(),
       //     msg_stamp.sec, msg_stamp.nanosec);

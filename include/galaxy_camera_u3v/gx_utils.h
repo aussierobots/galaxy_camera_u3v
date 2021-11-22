@@ -319,5 +319,11 @@ inline const char* GetErrorString(GX_STATUS emErrorStatus)
     return error_string;
 }
 
+std::string string_thread_id()
+{
+  auto hashed = std::hash<std::thread::id>()(std::this_thread::get_id());
+  return std::to_string(hashed);
+}
+
 
 #endif

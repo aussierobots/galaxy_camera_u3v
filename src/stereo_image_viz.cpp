@@ -32,6 +32,9 @@ public:
     qos.reliable();
     // auto qos = rclcpp::ServicesQoS();
 
+    callback_group_0_subscribers_ = create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
+    callback_group_1_subscribers_ = create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
+
     auto img_viz = [this](sensor_msgs::msg::Image::ConstSharedPtr img_msg, std::string window_name){
       const string& raw_encoding = img_msg->encoding;
       if (raw_encoding != enc::BAYER_RGGB8
@@ -108,6 +111,10 @@ public:
       cv::waitKey(1000/FRAME_RATE);
     };
 
+    auto subscriptions_0_opt = rclcpp::SubscriptionOptions();
+    subscriptions_0_opt.callback_group = callback_group_0_subscribers_;
+    auto subscriptions_1_opt = rclcpp::SubscriptionOptions();
+    subscriptions_0_opt.callback_group = callback_group_1_subscribers_;
 
     string topic_0_param_name = "left_camera_topic";
     string topic_0_value = "/stereo/left/image_raw";
@@ -117,7 +124,8 @@ public:
       topic_0_value, qos,
       [img_viz](sensor_msgs::msg::Image::ConstSharedPtr img_msg){
         img_viz(img_msg, "left camera");
-      }
+      },
+      subscriptions_0_opt
     );
 
     string topic_1_param_name = "right_camera_topic";
@@ -128,7 +136,8 @@ public:
       topic_1_value, qos,
       [img_viz](sensor_msgs::msg::Image::ConstSharedPtr img_msg){
         img_viz(img_msg, "right camera");
-      }
+      },
+      subscriptions_1_opt
     );
 
   }
@@ -138,6 +147,8 @@ public:
     RCLCPP_INFO(this->get_logger(),"finished");
   }
 private:
+  rclcpp::CallbackGroup::SharedPtr callback_group_0_subscribers_;
+  rclcpp::CallbackGroup::SharedPtr callback_group_1_subscribers_;
 
   rclcpp::Subscription<sensor_msgs::msg::Image>::ConstSharedPtr image_0_sub_;
   rclcpp::Subscription<sensor_msgs::msg::Image>::ConstSharedPtr image_1_sub_;

@@ -2,7 +2,9 @@
 #include <iostream>
 #include <iomanip>
 #include <string>
-#include <deque>
+// #include <deque>
+#include <map>
+#include <fstream>
 #include "rclcpp/rclcpp.hpp"
 #include "rclcpp_components/register_node_macro.hpp"
 #include "sensor_msgs/msg/image.hpp"
@@ -23,7 +25,14 @@ namespace enc = sensor_msgs::image_encodings;
 
 #define FRAME_RATE 30.0
 
+
 namespace stereo_capture {
+
+std::string string_thread_id()
+{
+  auto hashed = std::hash<std::thread::id>()(std::this_thread::get_id());
+  return std::to_string(hashed);
+}
 
 enum CameraFrame {left_frame, right_frame};
 
@@ -45,6 +54,7 @@ public:
 
     image_path_ = declare_parameter<std::string>("image_path","/tmp");
 
+    logfile_.open("/tmp/stereo_frame_capture.log" , std::ofstream::out | std::ios_base::trunc);
 
     RCLCPP_INFO(get_logger(),"starting - image_path: %s", image_path_.c_str());
 
@@ -65,7 +75,12 @@ public:
     strftime(buffer, sizeof(buffer), "%Y%m%d%H%M%S", timeinfo);
     run_ts_ = std::string(buffer);
 
-    capture_stereo_timer_ = create_wall_timer(33ms, std::bind(&StereoFrameCap::capture_stereo_callback, this));
+    callback_group_0_subscribers_ = create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
+    callback_group_1_subscribers_ = create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
+
+    callback_group_writers_ = create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
+
+    capture_stereo_timer_ = create_wall_timer(100ms, std::bind(&StereoFrameCap::capture_stereo_callback, this), callback_group_writers_);
 
     auto img_viz_cap = [this](sensor_msgs::msg::Image::ConstSharedPtr img_msg, std::string window_name, CameraFrame camera_frame){
       const string& raw_encoding = img_msg->encoding;
@@ -114,21 +129,28 @@ public:
 
       FrameCaptureData frame_data = {camera_frame, img.clone(), img_msg};
       auto frame_data_ptr = std::make_shared<FrameCaptureData>(frame_data);
-      frame_queue_.push_back(frame_data_ptr);
+      long long frame_key = (long long)((long long)img_msg->header.stamp.sec*(long long)1000000000) + img_msg->header.stamp.nanosec;
+      // RCLCPP_INFO(get_logger(),"stamp.sec: %d stamp.nanosec: %09d frame_key: %lld camera: %d", img_msg->header.stamp.sec, img_msg->header.stamp.nanosec, frame_key, camera_frame);
+      // frame_queue_.push_back(frame_data_ptr);
+      frame_queue_.insert(pair <long long, std::shared_ptr<stereo_capture::FrameCaptureData>> (frame_key, frame_data_ptr));
       RCLCPP_INFO_ONCE(get_logger(), "queuing first %s frame ...", window_name.c_str());
 
-      cv::Mat img_d;
+      // cv::Mat img_d;
 
-      cv::resize(img, img_d, cv::Size(img_msg->width/2, img_msg->height/2), cv::INTER_LINEAR);
+      // cv::resize(img, img_d, cv::Size(img_msg->width/2, img_msg->height/2), cv::INTER_LINEAR);
 
-      cv::putText(img_d, img_msg->encoding, cv::Point(10,30), cv::FONT_HERSHEY_COMPLEX,1,cv::Scalar(255.0,0.0,0.0));
-      cv::putText(img_d, stampTimeStream.str(), cv::Point(10,60), cv::FONT_HERSHEY_COMPLEX,1,cv::Scalar(255.0,0.0,0.0));
-      cv::namedWindow(window_name, cv::WINDOW_GUI_EXPANDED);
-      cv::imshow(window_name, img_d);
+      // cv::putText(img_d, img_msg->encoding, cv::Point(10,30), cv::FONT_HERSHEY_COMPLEX,1,cv::Scalar(255.0,0.0,0.0));
+      // cv::putText(img_d, stampTimeStream.str(), cv::Point(10,60), cv::FONT_HERSHEY_COMPLEX,1,cv::Scalar(255.0,0.0,0.0));
+      // cv::namedWindow(window_name, cv::WINDOW_AUTOSIZE);
+      // cv::imshow(window_name, img_d);
 
-      cv::waitKey(1000/FRAME_RATE);
+      // // cv::waitKey(1);
     };
 
+    auto subscriptions_0_opt = rclcpp::SubscriptionOptions();
+    subscriptions_0_opt.callback_group = callback_group_0_subscribers_;
+    auto subscriptions_1_opt = rclcpp::SubscriptionOptions();
+    subscriptions_1_opt.callback_group = callback_group_1_subscribers_;
 
     string topic_0_param_name = "left_camera_topic";
     string topic_0_value = "/stereo/left/image_raw";
@@ -138,7 +160,8 @@ public:
       topic_0_value, qos,
       [img_viz_cap](sensor_msgs::msg::Image::ConstSharedPtr img_msg){
         img_viz_cap(img_msg, "left camera", left_frame);
-      }
+      },
+      subscriptions_0_opt
     );
 
     string topic_1_param_name = "right_camera_topic";
@@ -149,7 +172,8 @@ public:
       topic_1_value, qos,
       [img_viz_cap](sensor_msgs::msg::Image::ConstSharedPtr img_msg){
         img_viz_cap(img_msg, "right camera", right_frame);
-      }
+      },
+      subscriptions_1_opt
     );
 
   }
@@ -159,6 +183,9 @@ public:
     RCLCPP_INFO(this->get_logger(),"finished");
   }
 private:
+  rclcpp::CallbackGroup::SharedPtr callback_group_0_subscribers_;
+  rclcpp::CallbackGroup::SharedPtr callback_group_1_subscribers_;
+  rclcpp::CallbackGroup::SharedPtr callback_group_writers_;
 
   rclcpp::Subscription<sensor_msgs::msg::Image>::ConstSharedPtr image_0_sub_;
   rclcpp::Subscription<sensor_msgs::msg::Image>::ConstSharedPtr image_1_sub_;
@@ -169,7 +196,8 @@ private:
   std::string run_ts_;
   std::string size_;
 
-  std::deque<std::shared_ptr<stereo_capture::FrameCaptureData>> frame_queue_;
+  // std::deque<std::shared_ptr<stereo_capture::FrameCaptureData>> frame_queue_;
+  std::multimap<long long, std::shared_ptr<stereo_capture::FrameCaptureData>> frame_queue_;
 
   std::shared_ptr<stereo_capture::FrameCaptureData> left_frame_, left_frame_prev_;
   std::shared_ptr<stereo_capture::FrameCaptureData> right_frame_, right_frame_prev_;
@@ -178,16 +206,43 @@ private:
 
   std::vector<int> webp_write_params_;
 
+  std::ofstream logfile_;
+
   CAMERA_LOCAL
   void capture_stereo_callback () {
+
+    RCLCPP_INFO_ONCE(get_logger(), "starting capture_stereo_callback - thread %s", string_thread_id().c_str());
 
     // just return if nothing to do
     if (frame_queue_.size() == 0) {
       return;
     }
 
-    while (frame_queue_.size() > 0) {
-      auto frame = frame_queue_.front();
+    // want at least a second of images queued from both cameras
+    // they can come in out of order from left and right - hence the need for the multi-map
+    if (frame_queue_.size() < 30) {
+      return;
+    }
+    auto time_now = rclcpp::Clock().now();
+    auto time_wait = rclcpp::Time((time_now.seconds()-2)*1000000000); // want them to be at least 1 full second old
+    long long wait_key = (long long)time_wait.seconds()*(long long)1000000000;
+    // RCLCPP_INFO(get_logger(),"wait_key: %lld", wait_key);
+
+    auto itlow = frame_queue_.lower_bound(wait_key);
+    auto low_key = itlow->first;
+
+    // RCLCPP_INFO(get_logger(),"itlow frame_key: %lld, begin() frame_key: %lld ", low_key, frame_queue_.begin()->first);
+
+    while (frame_queue_.size() > 0 && frame_queue_.begin()->first <= low_key) {
+
+      auto iter = frame_queue_.begin();
+
+      // auto frame = frame_queue_.front();
+      // auto frame_key = iter->first;
+      auto frame = iter->second;
+
+      logfile_ << frame->img_msg->header.stamp.sec << "." << std::setfill('0') << std::setw(9) << frame->img_msg->header.stamp.nanosec;
+      logfile_ << "," << frame->camera_frame << std::endl;
       switch (frame->camera_frame) {
         case left_frame:
           left_frame_ = frame;
@@ -195,7 +250,8 @@ private:
         case right_frame:
           right_frame_ = frame;
       }
-      frame_queue_.pop_front();
+      // frame_queue_.pop_front();
+      frame_queue_.erase(iter->first);
 
       if (left_frame_.use_count() ==0 || right_frame_.use_count() == 0) {
         RCLCPP_INFO(get_logger(), "waiting for stereo pair ...");
@@ -207,8 +263,8 @@ private:
       auto right_time = rclcpp::Time(right_frame_->img_msg->header.stamp);
 
       auto stamp_diff = rclcpp::Time(left_time)-rclcpp::Time(right_time);
-      // if (abs(stamp_diff.nanoseconds()) > 5000000) {
-      if (abs(stamp_diff.nanoseconds()) > 60000) {
+      if (abs(stamp_diff.nanoseconds()) > 7000000) {
+      // if (abs(stamp_diff.nanoseconds()) > 60000) {
         // if time stamps arent close - lets wait till they are
         continue;
       }
@@ -236,7 +292,7 @@ private:
       auto window_name="stereo images";
       cv::namedWindow(window_name, cv::WINDOW_AUTOSIZE);
       cv::imshow(window_name, img_d);
-      cv::waitKey(1000/FRAME_RATE);
+      // cv::waitKey(5);
 
       std::stringstream ss;
       ss << std::setw(4) << std::setfill('0') << match_img_n_;
@@ -257,7 +313,9 @@ private:
       }
       match_img_n_++;
     }
+    cv::waitKey(5);
   }
+
 };
 } // end namespace stereo_capture
 

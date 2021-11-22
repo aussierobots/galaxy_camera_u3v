@@ -2,7 +2,9 @@
 #include <iostream>
 #include <iomanip>
 #include <string>
-#include <deque>
+// #include <deque>
+#include <map>
+#include <fstream>
 #include "rclcpp/rclcpp.hpp"
 #include "rclcpp_components/register_node_macro.hpp"
 #include "sensor_msgs/msg/image.hpp"
@@ -24,6 +26,12 @@ namespace enc = sensor_msgs::image_encodings;
 #define FRAME_RATE 30.0
 
 namespace camera {
+
+std::string string_thread_id()
+{
+  auto hashed = std::hash<std::thread::id>()(std::this_thread::get_id());
+  return std::to_string(hashed);
+}
 
 enum CameraFrame {left_frame, right_frame};
 enum Calibration {chessboard, ChArUco};
@@ -52,6 +60,9 @@ public:
     qos.reliable();
 
     image_path_ = declare_parameter<std::string>("image_path","/tmp");
+
+    logfile_.open("/tmp/calibration_stereo_frame_capture.log" , std::ofstream::out | std::ios_base::trunc);
+
     size_ = declare_parameter<std::string>("size","11x7");
     string size_str(size_);
     char *token1 = strtok(const_cast<char *>(size_str.c_str()),"x");
@@ -98,15 +109,21 @@ public:
     run_ts_ = std::string(buffer);
 
 
-    capture_stereo_timer_ = create_wall_timer(100ms, std::bind(&CalibStereoImageCap::capture_stereo_callback, this));
+    callback_group_0_subscribers_ = create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
+    callback_group_1_subscribers_ = create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
+
+    callback_group_writers_ = create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
+
+    capture_stereo_timer_ = create_wall_timer(100ms, std::bind(&CalibStereoImageCap::capture_stereo_callback, this), callback_group_writers_);
 
     auto img_viz_cap = [this](sensor_msgs::msg::Image::ConstSharedPtr img_msg, std::string window_name, CameraFrame camera_frame){
+      RCLCPP_INFO_ONCE(get_logger(), "starting %s calibration image capture - thread %s", window_name.c_str(), string_thread_id().c_str());
       const string& raw_encoding = img_msg->encoding;
       if (raw_encoding != enc::BAYER_RGGB8
         && raw_encoding != enc::BAYER_RGGB16
         && raw_encoding != enc::RGB8
         ) {
-        RCLCPP_ERROR(this->get_logger(),"need BAYER_RGGB8|16 or RGB8 encoding .. exiting");
+        RCLCPP_ERROR(get_logger(),"need BAYER_RGGB8|16 or RGB8 encoding .. exiting");
         exit(-1);
       }
       int raw_type;
@@ -193,7 +210,11 @@ public:
 
           // add to frame_queue to process later
           FrameData frame_data = {calibration_, camera_frame, patternsize, img_msg, img.clone(), pattern_found, corners, marker_corners, marker_ids, charuco_ids};
-          frame_queue_.push_back(std::make_shared<FrameData>(frame_data));
+          auto frame_data_ptr = std::make_shared<FrameData>(frame_data);
+          long long frame_key = (long long)((long long)img_msg->header.stamp.sec*(long long)1000000000) + img_msg->header.stamp.nanosec;
+          // RCLCPP_INFO(get_logger(),"stamp.sec: %d stamp.nanosec: %09d frame_key: %lld camera: %d", img_msg->header.stamp.sec, img_msg->header.stamp.nanosec, frame_key, camera_frame);
+          frame_queue_.insert(pair <long long, std::shared_ptr<FrameData>> (frame_key, frame_data_ptr));
+          // frame_queue_.push_back(std::make_shared<FrameData>(frame_data));
         }
 
         cv::drawChessboardCorners(gray, patternsize, cv::Mat(corners), pattern_found);
@@ -206,7 +227,11 @@ public:
           cv::aruco::interpolateCornersCharuco(marker_corners, marker_ids, gray, board_, corners, charuco_ids);
           // add to frame_queue to process later
           FrameData frame_data = {calibration_, camera_frame, patternsize, img_msg, img.clone(), pattern_found, corners, marker_corners, marker_ids, charuco_ids};
-          frame_queue_.push_back(std::make_shared<FrameData>(frame_data));
+          auto frame_data_ptr = std::make_shared<FrameData>(frame_data);
+          long long frame_key = (long long)((long long)img_msg->header.stamp.sec*(long long)1000000000) + img_msg->header.stamp.nanosec;
+          // RCLCPP_INFO(get_logger(),"stamp.sec: %d stamp.nanosec: %09d frame_key: %lld camera: %d", img_msg->header.stamp.sec, img_msg->header.stamp.nanosec, frame_key, camera_frame);
+          frame_queue_.insert(pair <long long, std::shared_ptr<FrameData>> (frame_key, frame_data_ptr));
+          // frame_queue_.push_back(std::make_shared<FrameData>(frame_data));
 
           cv::aruco::drawDetectedMarkers(img, marker_corners, marker_ids);
           // if at least one charuco corner detected
@@ -225,7 +250,7 @@ public:
 
       cv::putText(img_d, img_msg->encoding, cv::Point(10,30), cv::FONT_HERSHEY_COMPLEX,1,cv::Scalar(255.0,0.0,0.0));
       cv::putText(img_d, stampTimeStream.str(), cv::Point(10,60), cv::FONT_HERSHEY_COMPLEX,1,cv::Scalar(255.0,0.0,0.0));
-      cv::namedWindow(window_name, cv::WINDOW_GUI_EXPANDED);
+      cv::namedWindow(window_name, cv::WINDOW_AUTOSIZE);
       cv::Mat disp_img;
       // cv::Mat gray_c3;
       // cv::cvtColor(gray_d, gray_c3, cv::COLOR_GRAY2BGR, 3);
@@ -243,6 +268,10 @@ public:
       cv::waitKey(1000/FRAME_RATE);
     };
 
+    auto subscriptions_0_opt = rclcpp::SubscriptionOptions();
+    subscriptions_0_opt.callback_group = callback_group_0_subscribers_;
+    auto subscriptions_1_opt = rclcpp::SubscriptionOptions();
+    subscriptions_1_opt.callback_group = callback_group_1_subscribers_;
 
     string topic_0_param_name = "left_camera_topic";
     string topic_0_value = "/stereo/left/image_raw";
@@ -252,7 +281,8 @@ public:
       topic_0_value, qos,
       [img_viz_cap](sensor_msgs::msg::Image::ConstSharedPtr img_msg){
         img_viz_cap(img_msg, "left camera", left_frame);
-      }
+      },
+      subscriptions_0_opt
     );
 
     string topic_1_param_name = "right_camera_topic";
@@ -263,7 +293,8 @@ public:
       topic_1_value, qos,
       [img_viz_cap](sensor_msgs::msg::Image::ConstSharedPtr img_msg){
         img_viz_cap(img_msg, "right camera", right_frame);
-      }
+      },
+      subscriptions_1_opt
     );
 
   }
@@ -273,6 +304,11 @@ public:
     RCLCPP_INFO(this->get_logger(),"finished");
   }
 private:
+
+
+  rclcpp::CallbackGroup::SharedPtr callback_group_0_subscribers_;
+  rclcpp::CallbackGroup::SharedPtr callback_group_1_subscribers_;
+  rclcpp::CallbackGroup::SharedPtr callback_group_writers_;
 
   rclcpp::Subscription<sensor_msgs::msg::Image>::ConstSharedPtr image_0_sub_;
   rclcpp::Subscription<sensor_msgs::msg::Image>::ConstSharedPtr image_1_sub_;
@@ -287,7 +323,8 @@ private:
   float square_length_; // in meters
   float marker_length_; // in meters
 
-  std::deque<std::shared_ptr<camera::FrameData>> frame_queue_;
+  // std::deque<std::shared_ptr<camera::FrameData>> frame_queue_;
+  std::multimap<long long, std::shared_ptr<camera::FrameData>> frame_queue_;
 
   std::shared_ptr<camera::FrameData> left_frame_, left_frame_prev_;
   std::shared_ptr<camera::FrameData> right_frame_, right_frame_prev_;
@@ -295,6 +332,7 @@ private:
   u_int32_t match_img_n_;
 
   std::vector<int> webp_write_params_;
+  std::ofstream logfile_;
 
   Calibration calibration_;
   cv::Ptr<cv::aruco::CharucoBoard> board_;
@@ -303,13 +341,38 @@ private:
   CAMERA_LOCAL
   void capture_stereo_callback () {
 
+    RCLCPP_INFO_ONCE(get_logger(), "starting capture_stereo_callback - thread %s", string_thread_id().c_str());
     // just return if nothing to do
     if (frame_queue_.size() == 0) {
       return;
     }
 
-    while (frame_queue_.size() > 0) {
-      auto frame = frame_queue_.front();
+    // want at least a second of images queued from both cameras
+    // they can come in out of order from left and right - hence the need for the multi-map
+    if (frame_queue_.size() < 30) {
+      return;
+    }
+    auto time_now = rclcpp::Clock().now();
+    auto time_wait = rclcpp::Time((time_now.seconds()-2)*1000000000); // want them to be at least 1 full second old
+    long long wait_key = (long long)time_wait.seconds()*(long long)1000000000;
+    RCLCPP_INFO(get_logger(),"wait_key: %lld", wait_key);
+
+    auto itlow = frame_queue_.lower_bound(wait_key);
+    auto low_key = itlow->first;
+
+    RCLCPP_INFO(get_logger(),"itlow frame_key: %lld, begin() frame_key: %lld ", low_key, frame_queue_.begin()->first);
+
+    while (frame_queue_.size() > 0 && frame_queue_.begin()->first <= low_key) {
+
+      auto iter = frame_queue_.begin();
+
+      // auto frame = frame_queue_.front();
+      // auto frame_key = iter->first;
+      auto frame = iter->second;
+
+      logfile_ << frame->img_msg->header.stamp.sec << "." << std::setfill('0') << std::setw(9) << frame->img_msg->header.stamp.nanosec;
+      logfile_ << "," << frame->camera_frame << std::endl;
+
       switch (frame->camera_frame) {
         case left_frame:
           left_frame_ = frame;
@@ -317,7 +380,8 @@ private:
         case right_frame:
           right_frame_ = frame;
       }
-      frame_queue_.pop_front();
+      // frame_queue_.pop_front();
+      frame_queue_.erase(iter->first);
 
       if (left_frame_.use_count() ==0 || right_frame_.use_count() == 0) {
         continue; // we need a left and right frame
@@ -328,11 +392,21 @@ private:
       auto right_time = rclcpp::Time(right_frame_->img_msg->header.stamp);
 
       auto stamp_diff = rclcpp::Time(left_time)-rclcpp::Time(right_time);
-      if (abs(stamp_diff.nanoseconds()) > 50000000) {
+
+      auto asd = abs(stamp_diff.seconds());
+      if (asd > 0.07) {
         // if time stamps arent close - lets wait till they are
+        RCLCPP_WARN(get_logger(), "absolute stamp diff: %f too high ", asd);
         continue;
       }
 
+      // only interested in perfectly detected boards
+      auto board_size = (size_t)((rows_-1) * (columns_-1));
+      if (left_frame_->corners.size() != board_size
+      || right_frame_->corners.size() != board_size) {
+        RCLCPP_WARN(get_logger(), "board size: %ld not perfect left: %ld right: %ld", board_size, left_frame_->corners.size(), right_frame_->corners.size());
+            return;
+      }
       // initialise the prev frames if the
       if (left_frame_prev_.use_count() == 0)
         left_frame_prev_ = left_frame_;
@@ -343,6 +417,7 @@ private:
       if ((corners_equal(left_frame_prev_->corners, left_frame_->corners)
        || corners_equal(right_frame_prev_->corners, right_frame_->corners))
        && match_img_n_ > 0) {
+         RCLCPP_WARN(get_logger(),"Chessboards same. move!");
          continue;
       }
 
