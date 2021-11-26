@@ -212,7 +212,7 @@ public:
           FrameData frame_data = {calibration_, camera_frame, patternsize, img_msg, img.clone(), pattern_found, corners, marker_corners, marker_ids, charuco_ids};
           auto frame_data_ptr = std::make_shared<FrameData>(frame_data);
           long long frame_key = (long long)((long long)img_msg->header.stamp.sec*(long long)1000000000) + img_msg->header.stamp.nanosec;
-          // RCLCPP_INFO(get_logger(),"stamp.sec: %d stamp.nanosec: %09d frame_key: %lld camera: %d", img_msg->header.stamp.sec, img_msg->header.stamp.nanosec, frame_key, camera_frame);
+          RCLCPP_DEBUG(get_logger(),"stamp.sec: %d stamp.nanosec: %09d frame_key: %lld camera: %d", img_msg->header.stamp.sec, img_msg->header.stamp.nanosec, frame_key, camera_frame);
           frame_queue_.insert(pair <long long, std::shared_ptr<FrameData>> (frame_key, frame_data_ptr));
           // frame_queue_.push_back(std::make_shared<FrameData>(frame_data));
         }
@@ -229,7 +229,7 @@ public:
           FrameData frame_data = {calibration_, camera_frame, patternsize, img_msg, img.clone(), pattern_found, corners, marker_corners, marker_ids, charuco_ids};
           auto frame_data_ptr = std::make_shared<FrameData>(frame_data);
           long long frame_key = (long long)((long long)img_msg->header.stamp.sec*(long long)1000000000) + img_msg->header.stamp.nanosec;
-          // RCLCPP_INFO(get_logger(),"stamp.sec: %d stamp.nanosec: %09d frame_key: %lld camera: %d", img_msg->header.stamp.sec, img_msg->header.stamp.nanosec, frame_key, camera_frame);
+          RCLCPP_DEBUG(get_logger(),"stamp.sec: %d stamp.nanosec: %09d frame_key: %lld camera: %d", img_msg->header.stamp.sec, img_msg->header.stamp.nanosec, frame_key, camera_frame);
           frame_queue_.insert(pair <long long, std::shared_ptr<FrameData>> (frame_key, frame_data_ptr));
           // frame_queue_.push_back(std::make_shared<FrameData>(frame_data));
 
@@ -355,12 +355,12 @@ private:
     auto time_now = rclcpp::Clock().now();
     auto time_wait = rclcpp::Time((time_now.seconds()-2)*1000000000); // want them to be at least 1 full second old
     long long wait_key = (long long)time_wait.seconds()*(long long)1000000000;
-    RCLCPP_INFO(get_logger(),"wait_key: %lld", wait_key);
+    RCLCPP_DEBUG(get_logger(),"wait_key: %lld", wait_key);
 
     auto itlow = frame_queue_.lower_bound(wait_key);
     auto low_key = itlow->first;
 
-    RCLCPP_INFO(get_logger(),"itlow frame_key: %lld, begin() frame_key: %lld ", low_key, frame_queue_.begin()->first);
+    RCLCPP_DEBUG(get_logger(),"itlow frame_key: %lld, begin() frame_key: %lld ", low_key, frame_queue_.begin()->first);
 
     while (frame_queue_.size() > 0 && frame_queue_.begin()->first <= low_key) {
 
@@ -396,7 +396,7 @@ private:
       auto asd = abs(stamp_diff.seconds());
       if (asd > 0.07) {
         // if time stamps arent close - lets wait till they are
-        RCLCPP_WARN(get_logger(), "absolute stamp diff: %f too high ", asd);
+        RCLCPP_DEBUG(get_logger(), "absolute stamp diff: %f too high ", asd);
         continue;
       }
 
@@ -405,7 +405,7 @@ private:
       if (left_frame_->corners.size() != board_size
       || right_frame_->corners.size() != board_size) {
         RCLCPP_WARN(get_logger(), "board size: %ld not perfect left: %ld right: %ld", board_size, left_frame_->corners.size(), right_frame_->corners.size());
-            return;
+        return;
       }
       // initialise the prev frames if the
       if (left_frame_prev_.use_count() == 0)

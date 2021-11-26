@@ -190,15 +190,12 @@ public:
       this->declare_parameter<int64_t>("line_selector", GX_ENUM_LINE_SELECTOR_LINE3);
       this->declare_parameter<int64_t>("line_mode", GX_ENUM_LINE_MODE_INPUT);
     }
-    this->declare_parameter<int64_t>("exposure_mode", GX_EXPOSURE_MODE_TIMED);
-    this->declare_parameter<double_t>("exposure_time", 100.0);
-    this->declare_parameter<int64_t>("exposure_auto", GX_EXPOSURE_AUTO_CONTINUOUS);
     this->declare_parameter<double_t>("auto_exposure_time_min", 20.0); // microseconds
     this->declare_parameter<double_t>("auto_exposure_time_max", 1000000.0); //microseconds
+    this->declare_parameter<int64_t>("exposure_auto", GX_EXPOSURE_AUTO_CONTINUOUS);
+    this->declare_parameter<int64_t>("exposure_mode", GX_EXPOSURE_MODE_TIMED);
+    this->declare_parameter<double_t>("exposure_time", 100000.0);
     this->declare_parameter<int64_t>("expected_gray_value", 120);
-    this->declare_parameter<int64_t>("acquisition_frame_rate_mode",GX_ACQUISITION_FRAME_RATE_MODE_ON);
-    // this->declare_parameter<double_t>("acquisition_frame_rate", 56.0);
-    this->declare_parameter<double_t>("acquisition_frame_rate", 30.0);
     this->declare_parameter<double_t>("current_acquisition_frame_rate",0.0);
     this->declare_parameter<double_t>("gain",0.0); // read only - gets updated periodically
     this->declare_parameter<int64_t>("gain_auto", GX_GAIN_AUTO_CONTINUOUS);
@@ -215,6 +212,10 @@ public:
     this->declare_parameter<int64_t>("awb_roi_offset_x", int16_t(2048/2 - (roi_width/2)));
     this->declare_parameter<int64_t>("awb_roi_offset_y", int16_t(1536/2 - (roi_height/2)));
     this->declare_parameter<int64_t>("awb_lamp_house", GX_AWB_LAMP_HOUSE_ADAPTIVE);
+
+    this->declare_parameter<int64_t>("acquisition_frame_rate_mode",GX_ACQUISITION_FRAME_RATE_MODE_ON);
+    // this->declare_parameter<double_t>("acquisition_frame_rate", 56.0);
+    this->declare_parameter<double_t>("acquisition_frame_rate", 30.0);
 
 
     status = GXStreamOn(gx_dev_handle_);
@@ -502,6 +503,9 @@ private:
       if(is_writeable){
         status = GXSetInt(gx_dev_handle_, feature_id, n_value);
       }
+      // } else {
+      //   RCLCPP_WARN(get_logger(),"not writable param_gx_set_int %d %ld", feature_id, n_value);
+      // }
     }
     if (status != GX_STATUS_SUCCESS) {
       auto error_msg = GetErrorString(status);
@@ -523,6 +527,9 @@ private:
       if(is_writeable){
         status = GXSetFloat(gx_dev_handle_, feature_id, n_value);
       }
+      // } else {
+      //   RCLCPP_WARN(get_logger(),"not writable param_gx_set_float %d %f", feature_id, n_value);
+      // }
     }
     if (status != GX_STATUS_SUCCESS) {
       auto error_msg = GetErrorString(status);
@@ -534,11 +541,12 @@ private:
 
   CAMERA_LOCAL
   void param_timer_callback(){
+    RCLCPP_INFO_ONCE(get_logger(),"first param_timer_callback ...");
     update_changed_enum_param("acquisition_mode", GX_ENUM_ACQUISITION_MODE);
     update_changed_enum_param("trigger_mode", GX_ENUM_TRIGGER_MODE);
     update_changed_enum_param("exposure_mode", GX_ENUM_EXPOSURE_MODE);
     update_changed_float_param("exposure_time", GX_FLOAT_EXPOSURE_TIME);
-    update_changed_enum_param("exposure_auto", GX_ENUM_EXPOSURE_MODE);
+    update_changed_enum_param("exposure_auto", GX_ENUM_EXPOSURE_AUTO);
     update_changed_float_param("auto_exposure_time_min", GX_FLOAT_AUTO_EXPOSURE_TIME_MIN);
     update_changed_float_param("auto_exposure_time_max", GX_FLOAT_AUTO_EXPOSURE_TIME_MAX);
     update_changed_int_param("expected_gray_value", GX_INT_GRAY_VALUE);
@@ -566,6 +574,7 @@ private:
       int64_t gx_value = 0;
       status = GXGetEnum(gx_dev_handle_, feature_id, &gx_value);
       if (status == GX_STATUS_SUCCESS && p_value != gx_value) {
+        // RCLCPP_INFO(get_logger(),"update_changed_enum_param %s %d p %ld gx %ld", param_name.c_str(), feature_id, p_value, gx_value );
         auto updated_param = rclcpp::Parameter(param_name, gx_value);
         this->set_parameter(updated_param);
       }

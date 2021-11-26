@@ -1,14 +1,23 @@
-"""Launch uv3_image_pub stereo left & right in a component container."""
+"""Launch uv3_image_pub stereo left & right in a component container. Lower Frame rate for calibration capture"""
 
 import launch
 from launch_ros.actions import ComposableNodeContainer
 from launch_ros.actions import LoadComposableNodes
 from launch_ros.descriptions import ComposableNode
 
+FRAME_RATE=5.0
+EXPOSURE_TIME=110000.0
+GAIN=10.0
+
 def generate_launch_description():
   """Generate launch description with multiple components."""
   left_params=[{'acquisition_role': 'leader'},
-               {'acquisition_frame_rate': 30.0},
+               {'acquisition_frame_rate': FRAME_RATE},
+               {'gain_auto': 0},
+               {'gain': GAIN},
+               {'exposure_auto': 0},
+               {'exposure_time': EXPOSURE_TIME},
+               {'auto_exposure_time_max': 200000.0},
                {'topic': 'stereo/left'},
                {'device_sn': 'FDS20110009'},
                {'pixel_format': 0x110000D},  # RG10
@@ -17,7 +26,12 @@ def generate_launch_description():
               #  {'image_encoding': 'BAYER_RGGB8'}]
               #  {'image_encoding': 'RGB8'}]
   right_params=[{'acquisition_role': 'follower'},
-               {'acquisition_frame_rate': 30.0},
+               {'acquisition_frame_rate': FRAME_RATE},
+               {'gain_auto': 0},
+               {'gain': GAIN},
+               {'exposure_auto': 0},
+               {'exposure_time': EXPOSURE_TIME},
+               {'auto_exposure_time_max': 200000.0},
                 {'topic': 'stereo/right'},
                 {'device_sn': 'FDS20110008'},
                 {'pixel_format': 0x110000D},  # RG10

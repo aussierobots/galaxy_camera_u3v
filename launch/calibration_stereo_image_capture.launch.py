@@ -7,7 +7,9 @@ from launch_ros.descriptions import ComposableNode
 
 def generate_launch_description():
   """Generate launch description with multiple components."""
-  params=[{'image_path': '/tmp'},
+  params=[
+          # {'image_path': '/tmp'},
+          {'image_path': '/u01/data/poc5/calibration/4mm'},
           {'size': '8x12'},
           {'calibration': 'ChArUco'}]
 
