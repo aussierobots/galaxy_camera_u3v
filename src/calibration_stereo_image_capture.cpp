@@ -379,6 +379,7 @@ private:
           break;
         case right_frame:
           right_frame_ = frame;
+          break;
       }
       // frame_queue_.pop_front();
       frame_queue_.erase(iter->first);

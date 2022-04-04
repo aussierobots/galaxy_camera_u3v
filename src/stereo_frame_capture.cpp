@@ -130,8 +130,7 @@ public:
       FrameCaptureData frame_data = {camera_frame, img.clone(), img_msg};
       auto frame_data_ptr = std::make_shared<FrameCaptureData>(frame_data);
       long long frame_key = (long long)((long long)img_msg->header.stamp.sec*(long long)1000000000) + img_msg->header.stamp.nanosec;
-      // RCLCPP_INFO(get_logger(),"stamp.sec: %d stamp.nanosec: %09d frame_key: %lld camera: %d", img_msg->header.stamp.sec, img_msg->header.stamp.nanosec, frame_key, camera_frame);
-      // frame_queue_.push_back(frame_data_ptr);
+      RCLCPP_INFO(get_logger(),"stamp.sec: %d stamp.nanosec: %09d frame_key: %lld camera: %d", img_msg->header.stamp.sec, img_msg->header.stamp.nanosec, frame_key, camera_frame);
       frame_queue_.insert(pair <long long, std::shared_ptr<stereo_capture::FrameCaptureData>> (frame_key, frame_data_ptr));
       RCLCPP_INFO_ONCE(get_logger(), "queuing first %s frame ...", window_name.c_str());
 
@@ -223,15 +222,20 @@ private:
     if (frame_queue_.size() < 30) {
       return;
     }
-    auto time_now = rclcpp::Clock().now();
-    auto time_wait = rclcpp::Time((time_now.seconds()-2)*1000000000); // want them to be at least 1 full second old
-    long long wait_key = (long long)time_wait.seconds()*(long long)1000000000;
-    // RCLCPP_INFO(get_logger(),"wait_key: %lld", wait_key);
+    // cant use now() if replaying from rosbags
+    // auto time_now = rclcpp::Clock().now();
+    // auto time_wait = rclcpp::Time((time_now.seconds()-2)*1000000000); // want them to be at least 1 full second old
+    // long long wait_key = (long long)time_wait.seconds()*(long long)1000000000;
+
+
+    long long wait_key = frame_queue_.end()->first - (1*1000000000);
+
+    RCLCPP_INFO(get_logger(),"wait_key: %lld", wait_key);
 
     auto itlow = frame_queue_.lower_bound(wait_key);
     auto low_key = itlow->first;
 
-    // RCLCPP_INFO(get_logger(),"itlow frame_key: %lld, begin() frame_key: %lld ", low_key, frame_queue_.begin()->first);
+    RCLCPP_INFO(get_logger(),"itlow frame_key: %lld, begin() frame_key: %lld ", low_key, frame_queue_.begin()->first);
 
     while (frame_queue_.size() > 0 && frame_queue_.begin()->first <= low_key) {
 
@@ -249,6 +253,7 @@ private:
           break;
         case right_frame:
           right_frame_ = frame;
+          break;
       }
       // frame_queue_.pop_front();
       frame_queue_.erase(iter->first);
@@ -263,7 +268,9 @@ private:
       auto right_time = rclcpp::Time(right_frame_->img_msg->header.stamp);
 
       auto stamp_diff = rclcpp::Time(left_time)-rclcpp::Time(right_time);
-      if (abs(stamp_diff.nanoseconds()) > 7000000) {
+
+      auto asd = abs(stamp_diff.seconds());
+      if (asd > 1.0/30.0) {
       // if (abs(stamp_diff.nanoseconds()) > 60000) {
         // if time stamps arent close - lets wait till they are
         continue;
@@ -310,6 +317,7 @@ private:
           break;
         case right_frame:
           right_frame_prev_ = right_frame_;
+          break;
       }
       match_img_n_++;
     }
