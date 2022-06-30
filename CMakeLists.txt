@@ -6,9 +6,9 @@ if(NOT CMAKE_C_STANDARD)
   set(CMAKE_C_STANDARD 99)
 endif()
 
-# Default to C++14
+# Default to C++17
 if(NOT CMAKE_CXX_STANDARD)
-  set(CMAKE_CXX_STANDARD 14)
+  set(CMAKE_CXX_STANDARD 17)
 endif()
 
 if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
@@ -21,7 +21,7 @@ find_package(rclcpp REQUIRED)
 find_package(rclcpp_components REQUIRED)
 find_package(std_msgs REQUIRED)
 find_package(OpenCV REQUIRED)
-find_package(cv_bridge REQUIRED)
+# find_package(cv_bridge REQUIRED)
 find_package(camera_info_manager REQUIRED)
 find_package(image_transport REQUIRED)
 find_package(yaml_cpp_vendor REQUIRED)
@@ -36,6 +36,7 @@ add_library(camera_components SHARED
   src/calibration_stereo_image_capture.cpp
   src/stereo_frame_capture.cpp
 )
+ament_generate_version_header(camera_components)
 
 target_compile_definitions(camera_components
   PRIVATE "CAMERA_BUILDING_DLL")
