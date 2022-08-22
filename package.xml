@@ -11,12 +11,12 @@
   <url>https://github.com/aussierobots/galaxy_camera_u3v</url>
 
   <buildtool_depend>ament_cmake</buildtool_depend>
-  <build_depend>libopencv-dev</build_depend>
-  <build_depend>gxapi</build_depend>
+  <exec_depend>libopencv-dev</exec_depend>
+  <exec_depend>gxapi</exec_depend>
 
   <depend>rclcpp</depend>
   <depend>rclcpp_components</depend>
-  
+
   <depend>std_msgs</depend>
   <depend>sensor_msgs</depend>
   <depend>camera_info_manager</depend>
