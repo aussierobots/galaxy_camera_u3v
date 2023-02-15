@@ -16,7 +16,8 @@
 #include <opencv2/imgproc/imgproc.hpp>
 #include <opencv2/highgui/highgui.hpp>
 #include <opencv2/calib3d.hpp>
-#include <opencv2/aruco/charuco.hpp>
+#include <opencv2/objdetect/charuco_detector.hpp>
+#include <opencv2/objdetect/aruco_board.hpp>
 
 
 using namespace std::chrono_literals;
@@ -79,10 +80,14 @@ public:
     } else if (calibration_p.compare("ChArUco") == 0) {
       calibration_ = Calibration::ChArUco;
       RCLCPP_INFO(get_logger(), "ChArUco calibration detection");
-       cv::Ptr<cv::aruco::Dictionary> dictionary = cv::aruco::getPredefinedDictionary(cv::aruco::DICT_6X6_100);
-       board_ = cv::aruco::CharucoBoard::create(rows_, columns_,square_length_, marker_length_, dictionary);
-       aruco_params_ = cv::aruco::DetectorParameters::create();
-       aruco_params_->cornerRefinementMethod = cv::aruco::CORNER_REFINE_NONE;
+       auto dictionary = cv::aruco::getPredefinedDictionary(cv::aruco::DICT_6X6_100);
+      //  board_ = cv::aruco::CharucoBoard::create(rows_, columns_,square_length_, marker_length_, dictionary);
+       auto board = cv::aruco::CharucoBoard(cv::Size2f(static_cast< float >(rows_), static_cast< float >(columns_)),square_length_, marker_length_, dictionary);
+       auto detector_params = cv::aruco::DetectorParameters();
+       detector_params.cornerRefinementMethod = cv::aruco::CORNER_REFINE_NONE;
+       auto charuco_params = cv::aruco::CharucoParameters();
+       auto refine_params = cv::aruco::RefineParameters();
+       charuco_detector_ = std::make_shared<cv::aruco::CharucoDetector>(board, charuco_params, detector_params, refine_params);
     } else {
       RCLCPP_ERROR(get_logger(), "unknown calibration parameter: %s exiting...", calibration_p.c_str());
       exit(-1);
@@ -220,11 +225,13 @@ public:
         cv::drawChessboardCorners(gray, patternsize, cv::Mat(corners), pattern_found);
 
       } else if (calibration_ == Calibration::ChArUco) {
-        cv::aruco::detectMarkers(img, board_->dictionary, marker_corners, marker_ids, aruco_params_);
+        // cv::aruco::detectMarkers(img, board_.getDictionary(), marker_corners, marker_ids, aruco_params_);
+
+       charuco_detector_->detectBoard(img, corners, charuco_ids, marker_ids, marker_corners);
 
         if (marker_ids.size() > 0 ) {
           bool pattern_found = true;
-          cv::aruco::interpolateCornersCharuco(marker_corners, marker_ids, gray, board_, corners, charuco_ids);
+          // cv::aruco::interpolateCornersCharuco(marker_corners, marker_ids, gray, board_, corners, charuco_ids);
           // add to frame_queue to process later
           FrameData frame_data = {calibration_, camera_frame, patternsize, img_msg, img.clone(), pattern_found, corners, marker_corners, marker_ids, charuco_ids};
           auto frame_data_ptr = std::make_shared<FrameData>(frame_data);
@@ -335,8 +342,9 @@ private:
   std::ofstream logfile_;
 
   Calibration calibration_;
-  cv::Ptr<cv::aruco::CharucoBoard> board_;
-  cv::Ptr<cv::aruco::DetectorParameters> aruco_params_;
+  // cv::aruco::CharucoBoard board_;
+  // cv::aruco::DetectorParameters aruco_params_;
+  std::shared_ptr<cv::aruco::CharucoDetector> charuco_detector_;
 
   CAMERA_LOCAL
   void capture_stereo_callback () {
